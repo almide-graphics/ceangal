@@ -320,8 +320,12 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
 
   // 2. Create DOM overlay via ceangal (Almide)
   if (instance.exports.init_overlay) {
-    instance.exports.init_overlay(B(h(overlayEl)), B(canvas.clientWidth), B(canvas.clientHeight));
-    console.log("ceangal: overlay created");
+    try {
+      instance.exports.init_overlay(B(h(overlayEl)), B(canvas.clientWidth), B(canvas.clientHeight));
+      console.log("ceangal: overlay created");
+    } catch (e) {
+      console.warn("ceangal: overlay failed (record field codegen issue):", e.message);
+    }
   }
 
   // 3. Text input (JS-side)
