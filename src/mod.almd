@@ -49,7 +49,7 @@ let ROLE_TEXT = 0
 let ROLE_HEADING = 1
 let ROLE_LABEL = 2
 
-type TextLine = {
+type OverlayLine = {
   text: String,
   size: Float,
   x: Float,
@@ -61,13 +61,13 @@ type TextLine = {
   color: String,
 }
 
-fn heading(text: String, size: Float, x: Float, y: Float, align: Int, level: Int, color: String) -> TextLine =
+fn heading(text: String, size: Float, x: Float, y: Float, align: Int, level: Int, color: String) -> OverlayLine =
   { text: text, size: size, x: x, y: y, align: align, role: ROLE_HEADING, level: level, label_for: "", color: color }
 
-fn label(text: String, size: Float, x: Float, y: Float, align: Int, lf: String, color: String) -> TextLine =
+fn label(text: String, size: Float, x: Float, y: Float, align: Int, lf: String, color: String) -> OverlayLine =
   { text: text, size: size, x: x, y: y, align: align, role: ROLE_LABEL, level: 0, label_for: lf, color: color }
 
-fn text(text: String, size: Float, x: Float, y: Float, align: Int, color: String) -> TextLine =
+fn text(text: String, size: Float, x: Float, y: Float, align: Int, color: String) -> OverlayLine =
   { text: text, size: size, x: x, y: y, align: align, role: ROLE_TEXT, level: 0, label_for: "", color: color }
 
 // ── Cached style property string IDs ──
@@ -140,7 +140,7 @@ fn init_overlay(overlay: Int, canvas_w: Int, canvas_h: Int) -> Unit = {
     dom.set_style(el, st[0], st[1])         // position: absolute
     dom.set_style(el, st[4], float_to_px(line.size))
     dom.set_style(el, st[5], st[6])         // fontFamily: sans-serif
-    dom.set_style(el, s("color"), s(line.color))
+    // color is transparent (CSS) — SDF canvas renders the visible text
 
     dom.append_child(overlay, el)
 
