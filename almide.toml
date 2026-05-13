@@ -1,0 +1,10 @@
+[package]
+name = "ceangal"
+version = "0.0.1"
+description = "UI framework for Almide — layout, widget, interaction on top of snaidhm"
+
+[dependencies]
+snaidhm = { git = "https://github.com/dubhlux/snaidhm.git" }
+
+[targets]
+wasm = true

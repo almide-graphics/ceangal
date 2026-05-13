@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>ceangal — UI framework demo</title>
+  <style>
+    body { margin: 0; background: #111; display: flex; justify-content: center; align-items: center; height: 100vh; }
+    .canvas-container { position: relative; width: 512px; height: 512px; }
+    canvas { width: 512px; height: 512px; display: block; }
+    .text-overlay {
+      position: absolute; top: 0; left: 0; width: 512px; height: 512px;
+      pointer-events: none;
+    }
+    .text-overlay span, .text-overlay h1, .text-overlay h2, .text-overlay h3 {
+      position: absolute;
+      pointer-events: auto;
+      cursor: text;
+      color: #444;
+      -webkit-user-select: text;
+      user-select: text;
+      white-space: nowrap;
+      line-height: 1;
+    }
+    .text-overlay span::selection, .text-overlay h1::selection,
+    .text-overlay h2::selection, .text-overlay h3::selection {
+      background: rgba(66, 133, 244, 0.4);
+      color: inherit;
+    }
+    .input-area {
+      position: absolute;
+      pointer-events: auto;
+      cursor: text;
+      overflow: hidden;
+    }
+    .input-area .input-display {
+      font-family: sans-serif;
+      white-space: pre;
+      min-height: 1.2em;
+      color: #333;
+      line-height: 1.2;
+    }
+    .input-area .placeholder { color: #999; font-style: italic; }
+    .ime-textarea {
+      position: absolute;
+      color: transparent;
+      caret-color: transparent;
+      background: transparent;
+      border: none; outline: none; resize: none;
+      overflow: hidden;
+      font-family: sans-serif;
+      font-size: 11px;
+      line-height: 1.2;
+      padding: 0; margin: 0;
+      pointer-events: none;
+      z-index: 2;
+    }
+  </style>
+</head>
+<body>
+  <div class="canvas-container">
+    <canvas id="canvas" width="512" height="512"></canvas>
+    <div id="text-overlay" class="text-overlay"></div>
+    <textarea id="ime-input" class="ime-textarea" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" rows="1"></textarea>
+  </div>
+  <script type="module">
+    import { init } from "./ceangal_runtime.js";
+
+    // Draw a simple gradient background on canvas (placeholder for snaidhm)
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const grad = ctx.createLinearGradient(0, 0, 512, 512);
+    grad.addColorStop(0, "#1a1a2e");
+    grad.addColorStop(1, "#16213e");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 512, 512);
+
+    // White card area
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    ctx.roundRect(26, 26, 460, 460, 20);
+    ctx.fill();
+
+    // Header bar
+    const hgrad = ctx.createLinearGradient(38, 38, 38, 115);
+    hgrad.addColorStop(0, "#1e3a6e");
+    hgrad.addColorStop(1, "#4878c8");
+    ctx.fillStyle = hgrad;
+    ctx.beginPath();
+    ctx.roundRect(38, 38, 436, 77, 10);
+    ctx.fill();
+
+    init(
+      "./ceangal.wasm?v=" + Date.now(),
+      document.getElementById("text-overlay"),
+      document.getElementById("ime-input"),
+      512, 512,
+    ).catch(e => { document.body.textContent = e.message; console.error(e); });
+  </script>
+</body>
+</html>

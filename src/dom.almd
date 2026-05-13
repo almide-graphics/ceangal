@@ -1,0 +1,43 @@
+// ceangal DOM bindings — @extern(wasm) declarations
+//
+// All DOM elements are opaque integer handles.
+// Strings are built via begin_str/push_byte/commit_str, then referenced by ID.
+
+// ── String builder ──
+
+@extern(wasm, "dom", "begin_str")
+fn begin_str() -> Unit = _
+
+@extern(wasm, "dom", "push_byte")
+fn push_byte(b: Int) -> Unit = _
+
+@extern(wasm, "dom", "commit_str")
+fn commit_str() -> Int = _
+
+// ── Element operations ──
+
+@extern(wasm, "dom", "create_element")
+fn create_element(tag_str_id: Int) -> Int = _
+
+@extern(wasm, "dom", "set_text")
+fn set_text(el: Int, text_str_id: Int) -> Unit = _
+
+@extern(wasm, "dom", "set_attr")
+fn set_attr(el: Int, name_str_id: Int, val_str_id: Int) -> Unit = _
+
+@extern(wasm, "dom", "set_style")
+fn set_style(el: Int, prop_str_id: Int, val_str_id: Int) -> Unit = _
+
+@extern(wasm, "dom", "append_child")
+fn append_child(parent: Int, child: Int) -> Unit = _
+
+@extern(wasm, "dom", "get_offset_width")
+fn get_offset_width(el: Int) -> Float = _
+
+@extern(wasm, "dom", "clear_children")
+fn clear_children(el: Int) -> Unit = _
+
+// ── Debug ──
+
+@extern(wasm, "dom", "log")
+fn log(str_id: Int) -> Unit = _

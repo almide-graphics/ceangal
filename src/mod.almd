@@ -1,0 +1,216 @@
+// ceangal — UI framework for Almide
+//
+// Creates DOM text overlay for accessibility, selection, and interaction.
+// Almide computes positions and describes elements; JS runtime creates DOM.
+
+import self.dom as dom
+import snaidhm
+
+// ── String helper ──
+
+fn s(text: String) -> Int = {
+  dom.begin_str()
+  for b in string.to_bytes(text) { dom.push_byte(b) }
+  dom.commit_str()
+}
+
+// ── NDC → pixel conversion ──
+
+fn ndc_to_x(nx: Float, w: Float) -> Float = (nx + 1.0) * 0.5 * w
+fn ndc_to_y(ny: Float, h: Float) -> Float = (1.0 - ny) * 0.5 * h
+
+fn float_to_px(v: Float) -> Int = {
+  // "123.4px" → commit as string ID
+  let whole = float.to_int(v)
+  let frac = float.to_int((v - int.to_float(whole)) * 10.0)
+  dom.begin_str()
+  for b in string.to_bytes(int.to_string(whole)) { dom.push_byte(b) }
+  dom.push_byte(46) // '.'
+  for b in string.to_bytes(int.to_string(int.abs(frac))) { dom.push_byte(b) }
+  dom.push_byte(112) // 'p'
+  dom.push_byte(120) // 'x'
+  dom.commit_str()
+}
+
+fn int_to_px(v: Int) -> Int = {
+  dom.begin_str()
+  for b in string.to_bytes(int.to_string(v)) { dom.push_byte(b) }
+  dom.push_byte(112) // 'p'
+  dom.push_byte(120) // 'x'
+  dom.commit_str()
+}
+
+// ── Text line types ──
+
+let ALIGN_LEFT = 0
+let ALIGN_CENTER = 1
+
+let ROLE_TEXT = 0
+let ROLE_HEADING = 1
+let ROLE_LABEL = 2
+
+type TextLine = {
+  text: String,
+  size: Int,
+  x: Float,
+  y: Float,
+  align: Int,
+  role: Int,
+  level: Int,
+  label_for: String,
+  color: String,
+}
+
+fn heading(text: String, size: Int, x: Float, y: Float, align: Int, level: Int, color: String) -> TextLine =
+  { text: text, size: size, x: x, y: y, align: align, role: ROLE_HEADING, level: level, label_for: "", color: color }
+
+fn label(text: String, size: Int, x: Float, y: Float, align: Int, lf: String, color: String) -> TextLine =
+  { text: text, size: size, x: x, y: y, align: align, role: ROLE_LABEL, level: 0, label_for: lf, color: color }
+
+fn text(text: String, size: Int, x: Float, y: Float, align: Int, color: String) -> TextLine =
+  { text: text, size: size, x: x, y: y, align: align, role: ROLE_TEXT, level: 0, label_for: "", color: color }
+
+// ── Cached style property string IDs ──
+
+fn cache_style_ids() -> List[Int] = [
+  s("position"),    // 0
+  s("absolute"),    // 1
+  s("left"),        // 2
+  s("top"),         // 3
+  s("fontSize"),    // 4
+  s("fontFamily"),  // 5
+  s("sans-serif"),  // 6
+  s("margin"),      // 7
+  s("0"),           // 8
+  s("fontWeight"),  // 9
+  s("normal"),      // 10
+]
+
+// ── Create text overlay ──
+
+@export(wasm, "init_overlay")
+fn init_overlay(overlay: Int, canvas_w: Int, canvas_h: Int) -> Unit = {
+  let w = int.to_float(canvas_w)
+  let h = int.to_float(canvas_h)
+
+  // Cache common strings
+  let st = cache_style_ids()
+  let s_role = s("role")
+  let s_aria = s("aria-label")
+  let s_note = s("note")
+
+  let white = "#fff"
+  let subtle = "rgba(204,217,255,0.9)"
+  let dark = "#334"
+  let mid = "#889"
+
+  let lines = [
+    heading("snaidhm",                40, 0.0,   0.64,  ALIGN_CENTER, 1, white),
+    heading("Almide > WASM > WebGPU", 13, 0.0,   0.57,  ALIGN_CENTER, 2, subtle),
+    label("Red",                      13, -0.5,  -0.02, ALIGN_CENTER, "red-circle", dark),
+    label("Green",                    13, 0.0,   -0.02, ALIGN_CENTER, "green-circle", dark),
+    label("Blue",                     13, 0.5,   -0.02, ALIGN_CENTER, "blue-circle", dark),
+    heading("Card A",                 11, -0.8,  -0.4,  ALIGN_LEFT, 3, dark),
+    heading("Card B",                 11, -0.25, -0.4,  ALIGN_LEFT, 3, dark),
+    heading("Card C",                 11, 0.3,   -0.4,  ALIGN_LEFT, 3, dark),
+    text("Shapes + Text",            16, 0.0,   -0.68, ALIGN_CENTER, mid),
+    text("all from Almide",          16, 0.0,   -0.78, ALIGN_CENTER, mid),
+  ]
+
+  for line in lines {
+    // Create element based on role
+    let el = if line.role == ROLE_HEADING then {
+      let tag = if line.level == 1 then "h1"
+                else if line.level == 2 then "h2"
+                else "h3"
+      let e = dom.create_element(s(tag))
+      dom.set_style(e, st[7], st[8])        // margin: 0
+      dom.set_style(e, st[9], st[10])       // fontWeight: normal
+      e
+    } else {
+      let e = dom.create_element(s("span"))
+      if line.role == ROLE_LABEL then {
+        dom.set_attr(e, s_role, s_note)
+        dom.set_attr(e, s_aria, s(line.text + " — " + line.label_for + " label"))
+      } else ()
+      e
+    }
+
+    dom.set_text(el, s(line.text))
+    dom.set_style(el, st[0], st[1])         // position: absolute
+    dom.set_style(el, st[4], int_to_px(line.size))
+    dom.set_style(el, st[5], st[6])         // fontFamily: sans-serif
+    dom.set_style(el, s("color"), s(line.color))
+
+    dom.append_child(overlay, el)
+
+    // Position after appending (need offsetWidth for centering)
+    let el_w = dom.get_offset_width(el)
+    let baseline_px = ndc_to_y(line.y, h)
+    let top_px = baseline_px - int.to_float(line.size) * 0.75
+
+    let left_px = if line.align == ALIGN_CENTER then
+      ndc_to_x(line.x, w) - el_w / 2.0
+    else
+      ndc_to_x(line.x, w)
+
+    dom.set_style(el, st[2], float_to_px(left_px))
+    dom.set_style(el, st[3], float_to_px(top_px))
+  }
+}
+
+// ── Render scene via snaidhm ──
+
+@export(wasm, "render_scene")
+fn do_render(device: Int, text_texture: Int, text_sampler: Int, img_vtx: Int, img_idx: Int, img_count: Int, img_texture: Int, img_sampler: Int) -> Unit = {
+  let dc = [0.5, 0.5, 0.5, 1.0]
+
+  let cubics =
+    snaidhm.round_rect_cubics(-0.9, -0.9, 1.8, 1.8, 0.08, dc, 0)
+    + snaidhm.round_rect_cubics(-0.85, 0.55, 1.7, 0.3, 0.04, dc, 1)
+    + snaidhm.circle_cubics(-0.5, 0.0, 0.18, dc, 2)
+    + snaidhm.circle_cubics(0.0, 0.0, 0.18, dc, 3)
+    + snaidhm.circle_cubics(0.5, 0.0, 0.18, dc, 4)
+    + snaidhm.round_rect_cubics(-0.85, -0.85, 0.5, 0.55, 0.04, dc, 5)
+    + snaidhm.round_rect_cubics(-0.3, -0.85, 0.5, 0.55, 0.04, dc, 6)
+    + snaidhm.round_rect_cubics(0.25, -0.85, 0.6, 0.55, 0.04, dc, 7)
+
+  let shadows = [
+    snaidhm.rect_shadow(-0.9, -0.9, 1.8, 1.8, 0.08, 0.01, -0.02, 0.08, [0.0,0.0,0.0,0.2]),
+    snaidhm.circ_shadow(-0.5, 0.0, 0.18, 0.008, -0.015, 0.04, [0.0,0.0,0.0,0.25]),
+    snaidhm.circ_shadow(0.0, 0.0, 0.18, 0.008, -0.015, 0.04, [0.0,0.0,0.0,0.25]),
+    snaidhm.circ_shadow(0.5, 0.0, 0.18, 0.008, -0.015, 0.04, [0.0,0.0,0.0,0.25]),
+    snaidhm.rect_shadow(-0.85, -0.85, 0.5, 0.55, 0.04, 0.005, -0.01, 0.03, [0.0,0.0,0.0,0.15]),
+    snaidhm.rect_shadow(-0.3, -0.85, 0.5, 0.55, 0.04, 0.005, -0.01, 0.03, [0.0,0.0,0.0,0.15]),
+    snaidhm.rect_shadow(0.25, -0.85, 0.6, 0.55, 0.04, 0.005, -0.01, 0.03, [0.0,0.0,0.0,0.15]),
+  ]
+
+  let paints = [
+    snaidhm.solid(1.0, 1.0, 1.0, 1.0),
+    snaidhm.linear_grad([0.12,0.22,0.58,1.0], [0.28,0.48,0.88,1.0], -0.85, 0.85, -0.85, 0.55),
+    snaidhm.radial_grad([1.0,0.55,0.5,0.9], [0.82,0.18,0.12,0.9], -0.5, 0.0, 0.18),
+    snaidhm.radial_grad([0.45,0.92,0.55,0.9], [0.12,0.62,0.22,0.9], 0.0, 0.0, 0.18),
+    snaidhm.radial_grad([0.5,0.7,1.0,0.9], [0.15,0.35,0.82,0.9], 0.5, 0.0, 0.18),
+    snaidhm.solid(0.95, 0.95, 0.98, 1.0),
+    snaidhm.solid(0.95, 0.95, 0.98, 1.0),
+    snaidhm.solid(0.95, 0.95, 0.98, 1.0),
+  ]
+
+  let center = snaidhm.ALIGN_CENTER
+  let left = snaidhm.ALIGN_LEFT
+  let text_lines = [
+    snaidhm.text_line(snaidhm.str("snaidhm"),               40.0, 0.0,   0.64,  center, [1.0,1.0,1.0,1.0]),
+    snaidhm.text_line(snaidhm.str("Almide > WASM > WebGPU"), 13.0, 0.0,   0.57,  center, [0.8,0.85,1.0,0.9]),
+    snaidhm.text_line(snaidhm.str("Red"),                    13.0, -0.5,  -0.02, center, [1.0,1.0,1.0,1.0]),
+    snaidhm.text_line(snaidhm.str("Green"),                  13.0, 0.0,   -0.02, center, [1.0,1.0,1.0,1.0]),
+    snaidhm.text_line(snaidhm.str("Blue"),                   13.0, 0.5,   -0.02, center, [1.0,1.0,1.0,1.0]),
+    snaidhm.text_line(snaidhm.str("Card A"),                 11.0, -0.8,  -0.4,  left,   [0.3,0.3,0.4,1.0]),
+    snaidhm.text_line(snaidhm.str("Card B"),                 11.0, -0.25, -0.4,  left,   [0.3,0.3,0.4,1.0]),
+    snaidhm.text_line(snaidhm.str("Card C"),                 11.0, 0.3,   -0.4,  left,   [0.3,0.3,0.4,1.0]),
+    snaidhm.text_line(snaidhm.str("Shapes + Text"),          16.0, 0.0,   -0.68, center, [0.5,0.5,0.6,1.0]),
+    snaidhm.text_line(snaidhm.str("all from Almide"),        16.0, 0.0,   -0.78, center, [0.5,0.5,0.6,1.0]),
+  ]
+
+  snaidhm.render_scene(device, cubics, shadows, paints, text_lines,
+    text_texture, text_sampler, img_vtx, img_idx, img_count, img_texture, img_sampler)
+}
