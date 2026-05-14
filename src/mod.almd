@@ -87,77 +87,155 @@ fn cache_style_ids() -> List[Int] = [
   s("normal"),      // 10
 ]
 
-// ── Create text overlay ──
+// ── Shared layout builder (used by both render + overlay) ──
+//
+// Tree structure (indices in flat rect list):
+//   0  root: col
+//   1    header: col [rendered: rounded rect]
+//   2      title_area: leaf (text positioning)
+//   3      subtitle_area: leaf (text positioning)
+//   4    circles_row: row
+//   5      circle_col_0: col
+//   6        circle_0: leaf [rendered: circle]
+//   7        label_0: leaf (text positioning)
+//   8      circle_col_1: col
+//   9        circle_1: leaf [rendered: circle]
+//  10        label_1: leaf (text positioning)
+//  11      circle_col_2: col
+//  12        circle_2: leaf [rendered: circle]
+//  13        label_2: leaf (text positioning)
+//  14    cards_row: row
+//  15      card_0: col [rendered: rounded rect]
+//  16        card_label_0: leaf (text positioning)
+//  17      card_1: col [rendered: rounded rect]
+//  18        card_label_1: leaf (text positioning)
+//  19      card_2: col [rendered: rounded rect]
+//  20        card_label_2: leaf (text positioning)
+
+fn build_demo_layout(vw: Float, vh: Float) -> List[layout.LayoutRect] = {
+  let title_area = layout.leaf(AUTO, 40.0)
+  let subtitle_area = layout.leaf(AUTO, 18.0)
+  let header = layout.col([title_area, subtitle_area])
+    |> layout.with_padding(layout.edges_xy(16.0, 10.0))
+    |> layout.with_align(2)  // ALIGN_CENTER
+    |> layout.with_gap(2.0)
+
+  let circle_label = layout.leaf(AUTO, 18.0)
+  let mk_circle_col = layout.col([layout.leaf(80.0, 80.0), circle_label])
+    |> layout.with_align(2) |> layout.with_gap(6.0)
+  let mk_circle_col2 = layout.col([layout.leaf(80.0, 80.0), circle_label])
+    |> layout.with_align(2) |> layout.with_gap(6.0)
+  let mk_circle_col3 = layout.col([layout.leaf(80.0, 80.0), circle_label])
+    |> layout.with_align(2) |> layout.with_gap(6.0)
+  let circles_row = layout.row([mk_circle_col, mk_circle_col2, mk_circle_col3])
+    |> layout.with_justify(5) |> layout.with_align(2)  // JUSTIFY_EVENLY, ALIGN_CENTER
+
+  let card_label = layout.leaf(AUTO, 16.0)
+  let mk_card = layout.col([card_label])
+    |> layout.with_grow(1.0) |> layout.with_padding(layout.edges_all(10.0))
+    |> layout.with_size(AUTO, 110.0)
+  let mk_card2 = layout.col([card_label])
+    |> layout.with_grow(1.0) |> layout.with_padding(layout.edges_all(10.0))
+    |> layout.with_size(AUTO, 110.0)
+  let mk_card3 = layout.col([card_label])
+    |> layout.with_grow(1.0) |> layout.with_padding(layout.edges_all(10.0))
+    |> layout.with_size(AUTO, 110.0)
+  let cards_row = layout.row([mk_card, mk_card2, mk_card3])
+    |> layout.with_gap(12.0)
+
+  let root = layout.col([header, circles_row, cards_row])
+    |> layout.with_padding(layout.edges_all(16.0))
+    |> layout.with_gap(16.0)
+    |> layout.with_size(vw, vh)
+
+  layout.layout(root, vw, vh)
+}
+
+// ── Text items positioned from layout rects ──
+
+type OverlayItem = { text_str: String, size: Float, px_x: Float, px_y: Float, align: Int, tag: String }
+
+fn overlay_items(rects: List[layout.LayoutRect]) -> List[OverlayItem] = {
+  // Indices from tree above
+  let title = rects[2]
+  let sub = rects[3]
+  let lbl0 = rects[7]   // label under circle 0
+  let lbl1 = rects[10]  // label under circle 1
+  let lbl2 = rects[13]  // label under circle 2
+  let cl0 = rects[16]   // card label 0
+  let cl1 = rects[18]   // card label 1
+  let cl2 = rects[20]   // card label 2
+  [
+    { text_str: "ceangal",            size: 36.0, px_x: title.x + title.w / 2.0, px_y: title.y + 2.0, align: ALIGN_CENTER, tag: "h1" },
+    { text_str: "Layout Engine Demo", size: 13.0, px_x: sub.x + sub.w / 2.0,     px_y: sub.y + 1.0,   align: ALIGN_CENTER, tag: "h2" },
+    { text_str: "Red",     size: 13.0, px_x: lbl0.x + lbl0.w / 2.0, px_y: lbl0.y,     align: ALIGN_CENTER, tag: "span" },
+    { text_str: "Green",   size: 13.0, px_x: lbl1.x + lbl1.w / 2.0, px_y: lbl1.y,     align: ALIGN_CENTER, tag: "span" },
+    { text_str: "Blue",    size: 13.0, px_x: lbl2.x + lbl2.w / 2.0, px_y: lbl2.y,     align: ALIGN_CENTER, tag: "span" },
+    { text_str: "Card A",  size: 11.0, px_x: cl0.x,                  px_y: cl0.y,       align: ALIGN_LEFT, tag: "h3" },
+    { text_str: "Card B",  size: 11.0, px_x: cl1.x,                  px_y: cl1.y,       align: ALIGN_LEFT, tag: "h3" },
+    { text_str: "Card C",  size: 11.0, px_x: cl2.x,                  px_y: cl2.y,       align: ALIGN_LEFT, tag: "h3" },
+  ]
+}
+
+// ── Create DOM text overlay (positioned from layout rects) ──
 
 @export(wasm, "init_overlay")
 fn init_overlay(overlay: Int, canvas_w: Int, canvas_h: Int) -> Unit = {
   let w = int.to_float(canvas_w)
   let h = int.to_float(canvas_h)
+  let rects = build_demo_layout(w, h)
+  let items = overlay_items(rects)
 
-  // Cache common strings
   let st = cache_style_ids()
-  let s_role = s("role")
-  let s_aria = s("aria-label")
-  let s_note = s("note")
 
-  let white = "#fff"
-  let subtle = "rgba(204,217,255,0.9)"
-  let dark = "#334"
-  let mid = "#889"
+  for item in items {
+    let el = dom.create_element(s(item.tag))
+    if item.tag == "h1" or item.tag == "h2" or item.tag == "h3" then {
+      dom.set_style(el, st[7], st[8])        // margin: 0
+      dom.set_style(el, st[9], st[10])       // fontWeight: normal
+    } else ()
 
-  let lines = [
-    heading("snaidhm",                40.0, 0.0,   0.64,  ALIGN_CENTER, 1, white),
-    heading("Almide > WASM > WebGPU", 13.0, 0.0,   0.57,  ALIGN_CENTER, 2, subtle),
-    label("Red",                      13.0, -0.5,  -0.02, ALIGN_CENTER, "red-circle", dark),
-    label("Green",                    13.0, 0.0,   -0.02, ALIGN_CENTER, "green-circle", dark),
-    label("Blue",                     13.0, 0.5,   -0.02, ALIGN_CENTER, "blue-circle", dark),
-    heading("Card A",                 11.0, -0.8,  -0.4,  ALIGN_LEFT, 3, dark),
-    heading("Card B",                 11.0, -0.25, -0.4,  ALIGN_LEFT, 3, dark),
-    heading("Card C",                 11.0, 0.3,   -0.4,  ALIGN_LEFT, 3, dark),
-    text("Shapes + Text",            16.0, 0.0,   -0.68, ALIGN_CENTER, mid),
-    text("all from Almide",          16.0, 0.0,   -0.78, ALIGN_CENTER, mid),
-  ]
-
-  for line in lines {
-    // Create element based on role
-    let el = if line.role == ROLE_HEADING then {
-      let tag = if line.level == 1 then "h1"
-                else if line.level == 2 then "h2"
-                else "h3"
-      let e = dom.create_element(s(tag))
-      dom.set_style(e, st[7], st[8])        // margin: 0
-      dom.set_style(e, st[9], st[10])       // fontWeight: normal
-      e
-    } else {
-      let e = dom.create_element(s("span"))
-      if line.role == ROLE_LABEL then {
-        dom.set_attr(e, s_role, s_note)
-        dom.set_attr(e, s_aria, s(line.text + " — " + line.label_for + " label"))
-      } else ()
-      e
-    }
-
-    dom.set_text(el, s(line.text))
+    dom.set_text(el, s(item.text_str))
     dom.set_style(el, st[0], st[1])         // position: absolute
-    dom.set_style(el, st[4], float_to_px(line.size))
+    dom.set_style(el, st[4], float_to_px(item.size))
     dom.set_style(el, st[5], st[6])         // fontFamily: sans-serif
-    // color is transparent (CSS) — SDF canvas renders the visible text
 
     dom.append_child(overlay, el)
 
-    // Position after appending (need offsetWidth for centering)
     let el_w = dom.get_offset_width(el)
-    let baseline_px = ndc_to_y(line.y, h)
-    let top_px = baseline_px - line.size * 0.75
-
-    let left_px = if line.align == ALIGN_CENTER then
-      ndc_to_x(line.x, w) - el_w / 2.0
+    let left_px = if item.align == ALIGN_CENTER then
+      item.px_x - el_w / 2.0
     else
-      ndc_to_x(line.x, w)
+      item.px_x
 
     dom.set_style(el, st[2], float_to_px(left_px))
-    dom.set_style(el, st[3], float_to_px(top_px))
+    dom.set_style(el, st[3], float_to_px(item.px_y))
   }
+}
+
+// ── Textarea position (exported for JS text input positioning) ──
+
+@export(wasm, "textarea_x")
+fn textarea_x() -> Float = {
+  let rects = build_demo_layout(512.0, 512.0)
+  // Card C = rect[19], label takes top, textarea goes below
+  let card = rects[19]
+  card.x + 10.0
+}
+
+@export(wasm, "textarea_y")
+fn textarea_y() -> Float = {
+  let rects = build_demo_layout(512.0, 512.0)
+  let card = rects[19]
+  let label = rects[20]
+  label.y + label.h + 6.0
+}
+
+@export(wasm, "textarea_w")
+fn textarea_w() -> Float = {
+  let rects = build_demo_layout(512.0, 512.0)
+  let card = rects[19]
+  card.w - 20.0
 }
 
 // Local constant (cross-module let workaround)
@@ -190,41 +268,12 @@ fn do_render(device: Int, img_vtx: Int, img_idx: Int, img_count: Int, img_textur
     [0.93, 0.93, 0.96, 1.0],    // 7: card c
   ]
 
-  let header = layout.leaf(AUTO, 80.0)
-  let circle_row = layout.row([
-    layout.leaf(90.0, 90.0),
-    layout.leaf(90.0, 90.0),
-    layout.leaf(90.0, 90.0),
-  ]) |> layout.with_justify(5) |> layout.with_align(2)
-     |> layout.with_size(AUTO, 160.0)
-  let card_row = layout.row([
-    layout.leaf(AUTO, 120.0) |> layout.with_grow(1.0),
-    layout.leaf(AUTO, 120.0) |> layout.with_grow(1.0),
-    layout.leaf(AUTO, 120.0) |> layout.with_grow(1.0),
-  ]) |> layout.with_gap(12.0)
-  let root = layout.col([header, circle_row, card_row])
-    |> layout.with_padding(layout.edges_all(16.0))
-    |> layout.with_gap(16.0)
-    |> layout.with_size(vw, vh)
+  let rects = build_demo_layout(vw, vh)
 
-  let rects = layout.layout(root, vw, vh)
-
-  // Debug: log rect count and positions
-  dom.log(s("rects: " + int.to_string(list.len(rects))))
-  for di in 0..int.min(list.len(rects), 10) {
-    dom.log(s("  [" + int.to_string(di) + "] x=" + int.to_string(float.to_int(rects[di].x))
-              + " y=" + int.to_string(float.to_int(rects[di].y))
-              + " w=" + int.to_string(float.to_int(rects[di].w))
-              + " h=" + int.to_string(float.to_int(rects[di].h))))
-  }
-
-  // rects: [root, header, circle_row, c0, c1, c2, card_row, card_a, card_b, card_c]
-
-  // ── Convert layout rects → snaidhm cubics ──
-  // Skip root (idx 0) and container nodes (circle_row=2, card_row=6)
-  // Render: header(1), circles(3,4,5), cards(7,8,9)
-  let render_map = [1, 3, 4, 5, 7, 8, 9]
-  let radii =      [0.02, 0.5, 0.5, 0.5, 0.02, 0.02, 0.02]  // circles get r=0.5 (circle shape)
+  // Rendered nodes from the tree (see build_demo_layout indices):
+  //   1=header, 6=circle0, 9=circle1, 12=circle2, 15=card0, 17=card1, 19=card2
+  let render_map = [1, 6, 9, 12, 15, 17, 19]
+  let radii =      [0.02, 0.5, 0.5, 0.5, 0.02, 0.02, 0.02]
 
   var cubics: List[snaidhm.Cubic] = []
   var paints: List[snaidhm.Paint] = []
@@ -235,12 +284,11 @@ fn do_render(device: Int, img_vtx: Int, img_idx: Int, img_count: Int, img_textur
     let ri = render_map[pi]
     let rect = rects[ri]
     let nx = px_to_ndc_x(rect.x, vw)
-    let ny = px_to_ndc_y(rect.y + rect.h, vh)  // bottom-left in NDC
+    let ny = px_to_ndc_y(rect.y + rect.h, vh)
     let nw = px_to_ndc_w(rect.w, vw)
     let nh = px_to_ndc_h(rect.h, vh)
     let r = radii[pi]
 
-    // Use circle_cubics for circles, round_rect for others
     if r > 0.1 then {
       let cx = nx + nw / 2.0
       let cy = ny + nh / 2.0
@@ -253,7 +301,41 @@ fn do_render(device: Int, img_vtx: Int, img_idx: Int, img_count: Int, img_textur
     }
     paints = paints + [snaidhm.solid(colors[pi + 1][0], colors[pi + 1][1], colors[pi + 1][2], colors[pi + 1][3])]
   }
+  let num_shape_paints = list.len(paints)
 
-  snaidhm.render_scene(device, cubics, shadows, paints,
+  // ── Text labels from shared overlay_items (same positions for GPU + DOM) ──
+  let items = overlay_items(rects)
+  let text_colors = [
+    [1.0, 1.0, 1.0, 1.0],      // ceangal
+    [0.8, 0.85, 1.0, 0.9],     // subtitle
+    [0.3, 0.3, 0.4, 1.0],      // Red
+    [0.3, 0.3, 0.4, 1.0],      // Green
+    [0.3, 0.3, 0.4, 1.0],      // Blue
+    [0.3, 0.3, 0.4, 1.0],      // Card A
+    [0.3, 0.3, 0.4, 1.0],      // Card B
+    [0.3, 0.3, 0.4, 1.0],      // Card C
+  ]
+  var text_specs: List[snaidhm.TextSpec] = []
+  for ti in 0..list.len(items) {
+    let item = items[ti]
+    // GPU text baseline: px_y is top of text in pixels, convert to NDC baseline
+    let ndc_x = px_to_ndc_x(item.px_x, vw)
+    let ndc_y = px_to_ndc_y(item.px_y + item.size * 0.75, vh)
+    text_specs = text_specs + [snaidhm.text_spec(
+      snaidhm.str(item.text_str), item.size, ndc_x, ndc_y, item.align, text_colors[ti]
+    )]
+  }
+
+  let text = snaidhm.build_text_cubics(text_specs)
+  // Remap text path_ids
+  var text_cubics: List[snaidhm.Cubic] = []
+  for cub in text.cubics {
+    text_cubics = text_cubics + [{
+      a: cub.a, b: cub.b, c: cub.c, d: cub.d,
+      color: cub.color, path_id: cub.path_id + num_shape_paints
+    }]
+  }
+
+  snaidhm.render_scene(device, cubics + text_cubics, shadows, paints + text.paints,
     img_vtx, img_idx, img_count, img_texture, img_sampler)
 }

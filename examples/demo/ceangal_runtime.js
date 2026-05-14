@@ -219,10 +219,11 @@ function buildImageQuads() {
 
 // ── Text input (JS-side) ──
 
-function setupTextInput(overlay, textarea, canvasW) {
-  const ndcToX = (nx) => (nx + 1) * 0.5 * canvasW;
-  const ndcToY = (ny) => (1 - ny) * 0.5 * canvasW;
-  const left = ndcToX(0.29), top = ndcToY(-0.48), width = ndcToX(0.81) - ndcToX(0.29);
+function setupTextInput(overlay, textarea, canvasW, exports) {
+  // Get textarea position from layout engine (pixel coordinates)
+  const left = exports.textarea_x ? Number(exports.textarea_x()) : 344;
+  const top = exports.textarea_y ? Number(exports.textarea_y()) : 316;
+  const width = exports.textarea_w ? Number(exports.textarea_w()) : 132;
 
   const inputArea = document.createElement("div");
   inputArea.className = "input-area";
@@ -334,11 +335,11 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
       instance.exports.init_overlay(B(h(overlayEl)), B(canvas.clientWidth), B(canvas.clientHeight));
       console.log("ceangal: overlay created");
     } catch (e) {
-      console.warn("ceangal: overlay failed (record field codegen issue):", e.message);
+      console.warn("ceangal: overlay failed:", e.message);
     }
   }
 
   // 3. Text input (JS-side)
-  setupTextInput(overlayEl, textareaEl, canvas.clientWidth);
+  setupTextInput(overlayEl, textareaEl, canvas.clientWidth, instance.exports);
   console.log("ceangal: text input ready");
 }
