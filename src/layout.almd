@@ -35,6 +35,10 @@ let WRAP_REVERSE = 2
 let DISPLAY_FLEX = 0
 let DISPLAY_NONE = 1
 
+let OVERFLOW_VISIBLE = 0
+let OVERFLOW_HIDDEN = 1
+let OVERFLOW_SCROLL = 2
+
 let POSITION_RELATIVE = 0
 let POSITION_ABSOLUTE = 1
 
@@ -99,6 +103,7 @@ type Node = {
   max_height: Float,
 
   display: Int,          // DISPLAY_FLEX | DISPLAY_NONE
+  overflow: Int,         // OVERFLOW_VISIBLE | OVERFLOW_HIDDEN | OVERFLOW_SCROLL
   position: Int,         // POSITION_RELATIVE | POSITION_ABSOLUTE
   pos_top: Float,        // UNDEFINED = not set
   pos_right: Float,
@@ -112,7 +117,10 @@ type Node = {
 
 // ── Layout result ──
 
-type LayoutRect = { x: Float, y: Float, w: Float, h: Float }
+type LayoutRect = {
+  x: Float, y: Float, w: Float, h: Float,
+  clip_x: Float, clip_y: Float, clip_w: Float, clip_h: Float,  // clip bounds (UNDEFINED = no clip)
+}
 
 // ── Node constructors ──
 
@@ -124,7 +132,7 @@ fn node_defaults() -> Node = {
   padding: edges_zero, margin: edges_zero, border: edges_zero,
   width: UNDEFINED, height: UNDEFINED, aspect_ratio: UNDEFINED,
   min_width: 0.0, min_height: 0.0, max_width: UNDEFINED, max_height: UNDEFINED,
-  display: DISPLAY_FLEX, position: POSITION_RELATIVE,
+  display: DISPLAY_FLEX, overflow: OVERFLOW_VISIBLE, position: POSITION_RELATIVE,
   pos_top: UNDEFINED, pos_right: UNDEFINED, pos_bottom: UNDEFINED, pos_left: UNDEFINED,
   width_pct: UNDEFINED, height_pct: UNDEFINED,
   children: [],
@@ -140,7 +148,7 @@ fn copy_node(n: Node) -> Node = {
   width: n.width, height: n.height, aspect_ratio: n.aspect_ratio,
   min_width: n.min_width, min_height: n.min_height,
   max_width: n.max_width, max_height: n.max_height,
-  display: n.display, position: n.position, pos_top: n.pos_top, pos_right: n.pos_right, pos_bottom: n.pos_bottom, pos_left: n.pos_left, width_pct: n.width_pct, height_pct: n.height_pct, children: n.children,
+  display: n.display, overflow: n.overflow, position: n.position, pos_top: n.pos_top, pos_right: n.pos_right, pos_bottom: n.pos_bottom, pos_left: n.pos_left, width_pct: n.width_pct, height_pct: n.height_pct, children: n.children,
 }
 
 fn row(children: List[Node]) -> Node = {
@@ -150,7 +158,7 @@ fn row(children: List[Node]) -> Node = {
     grow: n.grow, shrink: n.shrink, basis: n.basis, align_self: n.align_self,
     padding: n.padding, margin: n.margin, border: n.border, width: n.width, height: n.height, aspect_ratio: n.aspect_ratio,
     min_width: n.min_width, min_height: n.min_height, max_width: n.max_width, max_height: n.max_height,
-    display: n.display, position: n.position, pos_top: n.pos_top, pos_right: n.pos_right, pos_bottom: n.pos_bottom, pos_left: n.pos_left, width_pct: n.width_pct, height_pct: n.height_pct, children: children }
+    display: n.display, overflow: n.overflow, position: n.position, pos_top: n.pos_top, pos_right: n.pos_right, pos_bottom: n.pos_bottom, pos_left: n.pos_left, width_pct: n.width_pct, height_pct: n.height_pct, children: children }
 }
 
 fn col(children: List[Node]) -> Node = {
@@ -160,7 +168,7 @@ fn col(children: List[Node]) -> Node = {
     grow: n.grow, shrink: n.shrink, basis: n.basis, align_self: n.align_self,
     padding: n.padding, margin: n.margin, border: n.border, width: n.width, height: n.height, aspect_ratio: n.aspect_ratio,
     min_width: n.min_width, min_height: n.min_height, max_width: n.max_width, max_height: n.max_height,
-    display: n.display, position: n.position, pos_top: n.pos_top, pos_right: n.pos_right, pos_bottom: n.pos_bottom, pos_left: n.pos_left, width_pct: n.width_pct, height_pct: n.height_pct, children: children }
+    display: n.display, overflow: n.overflow, position: n.position, pos_top: n.pos_top, pos_right: n.pos_right, pos_bottom: n.pos_bottom, pos_left: n.pos_left, width_pct: n.width_pct, height_pct: n.height_pct, children: children }
 }
 
 fn leaf(w: Float, h: Float) -> Node = {
@@ -170,7 +178,7 @@ fn leaf(w: Float, h: Float) -> Node = {
     grow: n.grow, shrink: n.shrink, basis: n.basis, align_self: n.align_self,
     padding: n.padding, margin: n.margin, border: n.border, width: w, height: h, aspect_ratio: n.aspect_ratio,
     min_width: n.min_width, min_height: n.min_height, max_width: n.max_width, max_height: n.max_height,
-    display: n.display, position: n.position, pos_top: n.pos_top, pos_right: n.pos_right, pos_bottom: n.pos_bottom, pos_left: n.pos_left, width_pct: n.width_pct, height_pct: n.height_pct, children: [] }
+    display: n.display, overflow: n.overflow, position: n.position, pos_top: n.pos_top, pos_right: n.pos_right, pos_bottom: n.pos_bottom, pos_left: n.pos_left, width_pct: n.width_pct, height_pct: n.height_pct, children: [] }
 }
 
 // ── Builders ──
@@ -186,7 +194,7 @@ fn rebuild(n: Node, dir: Int, wrap: Int, just: Int, ai: Int, ac: Int,
     gap_main: gm, gap_cross: gc, grow: gr, shrink: sh, basis: bas, align_self: as_,
     padding: pad, margin: mar, border: bor, width: w, height: h, aspect_ratio: ar,
     min_width: mnw, min_height: mnh, max_width: mxw, max_height: mxh,
-    display: disp, position: pos, pos_top: pt, pos_right: pr, pos_bottom: pb, pos_left: pl,
+    display: disp, overflow: n.overflow, position: pos, pos_top: pt, pos_right: pr, pos_bottom: pb, pos_left: pl,
     width_pct: wpct, height_pct: hpct, children: ch }
 
 // Shorthand: copy all new fields from n
@@ -324,6 +332,19 @@ fn with_aspect_ratio(n: Node, v: Float) -> Node =
     n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
     n.padding, n.margin, n.border, n.width, n.height, v, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
+
+fn with_overflow(n: Node, v: Int) -> Node = {
+  let r = sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+    n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
+    n.padding, n.margin, n.border, n.width, n.height, n.aspect_ratio, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.display, n.children)
+  // sf copies n.overflow, but we need to override it. Use copy_node pattern:
+  { direction: r.direction, wrap: r.wrap, justify: r.justify, align_items: r.align_items, align_content: r.align_content,
+    gap_main: r.gap_main, gap_cross: r.gap_cross, grow: r.grow, shrink: r.shrink, basis: r.basis, align_self: r.align_self,
+    padding: r.padding, margin: r.margin, border: r.border, width: r.width, height: r.height, aspect_ratio: r.aspect_ratio,
+    min_width: r.min_width, min_height: r.min_height, max_width: r.max_width, max_height: r.max_height,
+    display: r.display, overflow: v, position: r.position, pos_top: r.pos_top, pos_right: r.pos_right, pos_bottom: r.pos_bottom, pos_left: r.pos_left, width_pct: r.width_pct, height_pct: r.height_pct, children: r.children }
+}
 
 fn with_display(n: Node, v: Int) -> Node =
   sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
@@ -648,7 +669,8 @@ fn resolve_line_flex(node: Node, line: FlexLine, inner_main: Float) -> FlexLine 
 // ── Position items within a line, return LayoutRects ──
 
 fn layout_line(node: Node, line: FlexLine, inner_main: Float, inner_cross: Float,
-               origin_main: Float, origin_cross: Float, line_cross: Float) -> List[LayoutRect] = {
+               origin_main: Float, origin_cross: Float, line_cross: Float,
+               clip_x: Float, clip_y: Float, clip_w: Float, clip_h: Float) -> List[LayoutRect] = {
   let dir = node.direction
   let n_items = list.len(line.items)
   let gap_total = node.gap_main * int.to_float(int.max(0, n_items - 1))
@@ -729,7 +751,7 @@ fn layout_line(node: Node, line: FlexLine, inner_main: Float, inner_cross: Float
     let cw = clamp_dim(raw_cw, child.min_width, child.max_width)
     let ch = clamp_dim(raw_ch, child.min_height, child.max_height)
 
-    let sub = do_layout(child, cx, cy, cw, ch)
+    let sub = do_layout(child, cx, cy, cw, ch, clip_x, clip_y, clip_w, clip_h)
     rects = rects + sub
 
     cursor = cursor + item.main + me + spacing
@@ -739,10 +761,11 @@ fn layout_line(node: Node, line: FlexLine, inner_main: Float, inner_cross: Float
 
 // ── Core recursive layout ──
 
-fn do_layout(node: Node, x: Float, y: Float, w: Float, h: Float) -> List[LayoutRect] = {
+fn do_layout(node: Node, x: Float, y: Float, w: Float, h: Float,
+             clip_x: Float, clip_y: Float, clip_w: Float, clip_h: Float) -> List[LayoutRect] = {
   if node.display == DISPLAY_NONE then []
   else {
-    let self_rect = { x: x, y: y, w: w, h: h }
+    let self_rect = { x: x, y: y, w: w, h: h, clip_x: clip_x, clip_y: clip_y, clip_w: clip_w, clip_h: clip_h }
     let n_ch = list.len(node.children)
     if n_ch == 0 then [self_rect]
     else {
@@ -760,6 +783,12 @@ fn do_layout(node: Node, x: Float, y: Float, w: Float, h: Float) -> List[LayoutR
       let origin_main = if is_row(dir) then x + inset_left else y + inset_top
       let origin_cross = if is_row(dir) then y + inset_top else x + inset_left
 
+      // Compute child clip: if overflow:hidden, clip to own bounds, else inherit parent clip
+      let child_clip_x = if node.overflow != OVERFLOW_VISIBLE then x else clip_x
+      let child_clip_y = if node.overflow != OVERFLOW_VISIBLE then y else clip_y
+      let child_clip_w = if node.overflow != OVERFLOW_VISIBLE then w else clip_w
+      let child_clip_h = if node.overflow != OVERFLOW_VISIBLE then h else clip_h
+
       // Build and resolve flex lines
       let raw_lines = build_lines(node, inner_main)
       var lines: List[FlexLine] = []
@@ -773,7 +802,8 @@ fn do_layout(node: Node, x: Float, y: Float, w: Float, h: Float) -> List[LayoutR
       var flex_rects: List[LayoutRect] = []
       if n_lines == 1 then {
         flex_rects = layout_line(node, lines[0], inner_main, inner_cross,
-                                origin_main, origin_cross, inner_cross)
+                                origin_main, origin_cross, inner_cross,
+                                child_clip_x, child_clip_y, child_clip_w, child_clip_h)
       } else if n_lines > 1 then {
         var total_line_cross = 0.0
         for ln in lines { total_line_cross = total_line_cross + ln.cross_size }
@@ -800,14 +830,24 @@ fn do_layout(node: Node, x: Float, y: Float, w: Float, h: Float) -> List[LayoutR
           line_spacing = node.gap_cross + s
         } else ()
 
+        // Compute line cross positions (normal order first)
+        var line_positions: List[Float] = []
         var cursor_cross = line_offset
         for li in 0..n_lines {
-          let ln = lines[li]
-          let lc = ln.cross_size + line_stretch
-          let oc = origin_cross + cursor_cross
-          let rects = layout_line(node, ln, inner_main, inner_cross, origin_main, oc, lc)
-          flex_rects = flex_rects + rects
+          line_positions = line_positions + [cursor_cross]
+          let lc = lines[li].cross_size + line_stretch
           cursor_cross = cursor_cross + lc + line_spacing
+        }
+
+        // For wrap-reverse: mirror positions
+        for li in 0..n_lines {
+          let idx = if node.wrap == WRAP_REVERSE then n_lines - 1 - li else li
+          let ln = lines[idx]
+          let lc = ln.cross_size + line_stretch
+          let oc = origin_cross + line_positions[li]
+          let rects = layout_line(node, ln, inner_main, inner_cross, origin_main, oc, lc,
+                                  child_clip_x, child_clip_y, child_clip_w, child_clip_h)
+          flex_rects = flex_rects + rects
         }
       } else ()
 
@@ -836,7 +876,7 @@ fn do_layout(node: Node, x: Float, y: Float, w: Float, h: Float) -> List[LayoutR
                    else if is_defined(child.pos_bottom) then y + h - inset_top - ah - child.pos_bottom
                    else y + inset_top
 
-          abs_rects = abs_rects + do_layout(child, ax, ay, aw, ah)
+          abs_rects = abs_rects + do_layout(child, ax, ay, aw, ah, child_clip_x, child_clip_y, child_clip_w, child_clip_h)
         } else ()
       }
 
@@ -849,5 +889,5 @@ fn do_layout(node: Node, x: Float, y: Float, w: Float, h: Float) -> List[LayoutR
 
 fn layout(root: Node, viewport_w: Float, viewport_h: Float) -> List[LayoutRect] = {
   let size = compute_size(root, viewport_w, viewport_h)
-  do_layout(root, 0.0, 0.0, size.w, size.h)
+  do_layout(root, 0.0, 0.0, size.w, size.h, UNDEFINED, UNDEFINED, UNDEFINED, UNDEFINED)
 }

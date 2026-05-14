@@ -850,6 +850,28 @@ test "yoga: padding_percentage" {
 }
 
 // ════════════════════════════════════════
+// Wrap Reverse
+// ════════════════════════════════════════
+
+test "yoga: wrap_reverse_row" {
+  let root = lay.row([
+    lay.leaf(30.0, 30.0), lay.leaf(30.0, 30.0),
+    lay.leaf(30.0, 30.0), lay.leaf(30.0, 30.0),
+  ]) |> lay.with_size(100.0, UNDEF) |> lay.with_wrap(2)  // WRAP_REVERSE
+  let r = lay.layout(root, 100.0, UNDEF)
+  // 3 in first line, 1 wraps. Reverse: last line at top, first line at bottom.
+  // Rects order: lines are iterated in reverse, so line2 (1 item) first, then line1 (3 items)
+  assert(approx(r[0].h, 60.0))
+  // r[1] = child3 (from line2, laid out first) at y=0
+  assert(approx(r[1].y, 0.0))
+  assert(approx(r[1].w, 30.0))
+  // r[2-4] = child0,1,2 (from line1) at y=30
+  assert(approx(r[2].y, 30.0))
+  assert(approx(r[3].y, 30.0))
+  assert(approx(r[4].y, 30.0))
+}
+
+// ════════════════════════════════════════
 // Aspect Ratio
 // ════════════════════════════════════════
 
@@ -878,6 +900,45 @@ test "yoga: aspect_ratio_square" {
   let r = lay.layout(root, 200.0, 200.0)
   assert(approx(r[1].w, 80.0))
   assert(approx(r[1].h, 80.0))
+}
+
+// ════════════════════════════════════════
+// Overflow
+// ════════════════════════════════════════
+
+test "yoga: overflow_hidden_clip_propagation" {
+  // Parent with overflow:hidden, child overflows
+  let child = lay.leaf(200.0, 200.0)
+  let root = lay.col([child])
+    |> lay.with_size(100.0, 100.0)
+    |> lay.with_overflow(lay.OVERFLOW_HIDDEN)
+  let r = lay.layout(root, 100.0, 100.0)
+  // Child is laid out at full 200x200 (layout doesn't clip sizes)
+  assert(approx(r[1].w, 200.0))
+  assert(approx(r[1].h, 200.0))
+  // But clip rect is set to parent bounds
+  assert(approx(r[1].clip_x, 0.0))
+  assert(approx(r[1].clip_y, 0.0))
+  assert(approx(r[1].clip_w, 100.0))
+  assert(approx(r[1].clip_h, 100.0))
+}
+
+test "yoga: overflow_visible_no_clip" {
+  let child = lay.leaf(200.0, 200.0)
+  let root = lay.col([child]) |> lay.with_size(100.0, 100.0)
+  let r = lay.layout(root, 100.0, 100.0)
+  // No clip (UNDEFINED)
+  assert(r[1].clip_x < -0.5)  // UNDEFINED = -1
+}
+
+test "yoga: overflow_hidden_nested" {
+  let grandchild = lay.leaf(300.0, 300.0)
+  let child = lay.col([grandchild]) |> lay.with_size(200.0, 200.0) |> lay.with_overflow(lay.OVERFLOW_HIDDEN)
+  let root = lay.col([child]) |> lay.with_size(150.0, 150.0) |> lay.with_overflow(lay.OVERFLOW_HIDDEN)
+  let r = lay.layout(root, 150.0, 150.0)
+  // grandchild clip should be child's bounds (200x200), not root's
+  assert(approx(r[2].clip_x, 0.0))
+  assert(approx(r[2].clip_w, 200.0))
 }
 
 test "yoga: padding_percentage_asymmetric" {
