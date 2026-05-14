@@ -441,12 +441,66 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
 
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
-    const dy = e.deltaMode === 1 ? -e.deltaY * 20 : -e.deltaY;
-    if (instance.exports.scroll_wheel) {
-      instance.exports.scroll_wheel(dy);
-      animator.kick();
+    const scale = e.deltaMode === 1 ? 20 : 1;
+    // Horizontal: shift+wheel, horizontal trackpad, or tilt wheel
+    if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+      const dx = -((Math.abs(e.deltaX) > Math.abs(e.deltaY)) ? e.deltaX : e.deltaY) * scale;
+      if (instance.exports.scroll_wheel_x) {
+        instance.exports.scroll_wheel_x(dx);
+        animator.kick();
+      }
+    } else {
+      const dy = -e.deltaY * scale;
+      if (instance.exports.scroll_wheel) {
+        instance.exports.scroll_wheel(dy);
+        animator.kick();
+      }
     }
   }, { passive: false });
+
+  // ── Pointer drag scroll ──
+  let _dragging = false;
+  let _lastPointerY = 0;
+  const _velSamples = []; // {time, y}
+
+  canvas.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "mouse" || e.button !== 0) return;
+    _dragging = true;
+    _lastPointerY = e.clientY;
+    _velSamples.length = 0;
+    _velSamples.push({ time: performance.now(), y: e.clientY });
+    canvas.setPointerCapture(e.pointerId);
+  });
+
+  canvas.addEventListener("pointermove", (e) => {
+    if (!_dragging) return;
+    const dy = e.clientY - _lastPointerY;
+    _lastPointerY = e.clientY;
+    _velSamples.push({ time: performance.now(), y: e.clientY });
+    if (_velSamples.length > 4) _velSamples.shift();
+    if (instance.exports.scroll_drag) {
+      instance.exports.scroll_drag(dy);
+    }
+  });
+
+  canvas.addEventListener("pointerup", (e) => {
+    if (!_dragging) return;
+    _dragging = false;
+    // Estimate velocity from last samples
+    let vel = 0;
+    if (_velSamples.length >= 2) {
+      const first = _velSamples[0];
+      const last = _velSamples[_velSamples.length - 1];
+      const dt = (last.time - first.time) / 1000;
+      if (dt > 0.001) vel = (last.y - first.y) / dt;
+    }
+    if (instance.exports.scroll_release) {
+      instance.exports.scroll_release(vel);
+      animator.kick();
+    }
+  });
+
+  canvas.addEventListener("pointercancel", () => { _dragging = false; });
 
   let resizeTimer;
   window.addEventListener("resize", () => {

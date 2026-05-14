@@ -298,6 +298,11 @@ var scroll_vel = 0.0
 var scroll_min_bound = 0.0
 var scroll_state = 0
 
+var scroll_pos_x = 0.0
+var scroll_vel_x = 0.0
+var scroll_min_bound_x = 0.0
+var scroll_state_x = 0
+
 // ── Text-aware layout nodes ──
 // TextEntry: links a layout node index to text content for rendering
 
@@ -346,21 +351,20 @@ fn px_to_ndc_h(px: Float, vh: Float) -> Float = px / vh * 2.0
 
 // ── Build scene data (cubics, paints, shadows) from layout ──
 
-fn build_scene_data(vw: Float, vh: Float) -> { cubics: List[snaidhm.Cubic], paints: List[snaidhm.Paint], shadows: List[snaidhm.Shadow], content_h: Float } = {
+fn build_scene_data(vw: Float, vh: Float) -> { cubics: List[snaidhm.Cubic], paints: List[snaidhm.Paint], shadows: List[snaidhm.Shadow], content_w: Float, content_h: Float } = {
   let dc = [0.5, 0.5, 0.5, 1.0]
-  // Content = 200% of viewport height
-  // Top half (0-100%): red rect, Bottom half (100-200%): blue rect
-  // Small corner radius to avoid degenerate cubics
+  // Content = 200vw × 100vh  (red left, blue right)
   let red_cubics = snaidhm.round_rect_cubics(-1.0, -1.0, 2.0, 2.0, 0.01, dc, 0)
-  let blue_cubics = snaidhm.round_rect_cubics(-1.0, -3.0, 2.0, 2.0, 0.01, dc, 1)
+  let blue_cubics = snaidhm.round_rect_cubics(1.0, -1.0, 2.0, 2.0, 0.01, dc, 1)
   let cubics = red_cubics + blue_cubics
   let paints = [
     snaidhm.solid(0.9, 0.2, 0.2, 1.0),
     snaidhm.solid(0.2, 0.3, 0.9, 1.0),
   ]
   let shadows = [snaidhm.rect_shadow(99.0, 99.0, 0.01, 0.01, 0.0, 0.0, 0.0, 0.001, [0.0,0.0,0.0,0.0])]
-  let content_h = vh * 2.0
-  { cubics: cubics, paints: paints, shadows: shadows, content_h: content_h }
+  let content_w = vw * 2.0
+  let content_h = vh
+  { cubics: cubics, paints: paints, shadows: shadows, content_w: content_w, content_h: content_h }
 }
 
 // ── Prepare scene (called on init + resize) ──
@@ -372,18 +376,22 @@ fn do_prepare(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int, img
 
   let data = build_scene_data(vw, vh)
 
-  // content_height in physical pixels (same DPR scaling as phys_h)
+  // content dimensions in physical pixels (same DPR scaling as viewport)
   let dpr_scale = int.to_float(phys_h) / vh
+  let content_phys_w = float.to_int(data.content_w * dpr_scale) / 16 * 16
   let content_phys_h = float.to_int(data.content_h * dpr_scale) / 16 * 16
-  cached_scene = snaidhm.prepare_scene(device, phys_w, phys_h, content_phys_h, data.cubics, data.shadows, data.paints,
+  cached_scene = snaidhm.prepare_scene(device, phys_w, phys_h, content_phys_w, content_phys_h, data.cubics, data.shadows, data.paints,
     img_vtx, img_idx, img_count, img_texture, img_sampler)
   scene_ready = true
   cached_content_height = data.content_h
   cached_viewport_height = vh
 
-  // Set scroll bounds
+  // Set scroll bounds (vertical)
   scroll_min_bound = 0.0 - float.max(0.0, data.content_h - vh)
   scroll_pos = float.max(scroll_min_bound, float.min(0.0, scroll_pos))
+  // Set scroll bounds (horizontal)
+  scroll_min_bound_x = 0.0 - float.max(0.0, data.content_w - vw)
+  scroll_pos_x = float.max(scroll_min_bound_x, float.min(0.0, scroll_pos_x))
 
   // Draw first frame immediately
   snaidhm.draw_frame(cached_scene, 0.0)
@@ -397,9 +405,12 @@ fn scroll_is_overscrolled() -> Bool =
 fn draw_at_scroll() -> Unit = {
   if scene_ready then {
     let dpr = int.to_float(cached_scene.height) / cached_viewport_height
-    snaidhm.draw_frame(cached_scene, scroll_pos * dpr)
+    snaidhm.draw_frame_2d(cached_scene, scroll_pos_x * dpr, scroll_pos * dpr)
   } else ()
 }
+
+fn scroll_is_overscrolled_x() -> Bool =
+  scroll_pos_x > 0.5 or scroll_pos_x < scroll_min_bound_x - 0.5
 
 @export(wasm, "scroll_wheel")
 fn scroll_wheel(dy: Float) -> Unit = {
@@ -407,6 +418,35 @@ fn scroll_wheel(dy: Float) -> Unit = {
   scroll_pos = scroll_pos + dy
   scroll_state = if scroll_is_overscrolled() then SCROLL_BOUNCING else SCROLL_COASTING
   draw_at_scroll()
+}
+
+@export(wasm, "scroll_wheel_x")
+fn scroll_wheel_x(dx: Float) -> Unit = {
+  scroll_vel_x = dx * 2.0
+  scroll_pos_x = scroll_pos_x + dx
+  scroll_state_x = if scroll_is_overscrolled_x() then SCROLL_BOUNCING else SCROLL_COASTING
+  draw_at_scroll()
+}
+
+@export(wasm, "scroll_drag")
+fn scroll_drag(dy: Float) -> Unit = {
+  // Overscroll resistance
+  let over = if scroll_pos > 0.0 then scroll_pos
+             else if scroll_pos < scroll_min_bound then scroll_min_bound - scroll_pos
+             else 0.0
+  let resist = if over > 0.0 then 1.0 / (1.0 + over / 120.0) else 1.0
+  scroll_pos = scroll_pos + dy * resist
+  scroll_state = SCROLL_IDLE
+  draw_at_scroll()
+}
+
+@export(wasm, "scroll_release")
+fn scroll_release(vel: Float) -> Unit = {
+  let capped = if float.abs(vel) > 8000.0 then 8000.0 * (if vel > 0.0 then 1.0 else 0.0 - 1.0) else vel
+  scroll_vel = capped
+  scroll_state = if float.abs(capped) > 0.5 then SCROLL_COASTING
+                 else if scroll_is_overscrolled() then SCROLL_BOUNCING
+                 else SCROLL_IDLE
 }
 
 @export(wasm, "scroll_tick")
@@ -444,8 +484,36 @@ fn scroll_tick(dt_raw: Float) -> Int = {
     } else ()
   } else ()
 
+  // Horizontal physics (same model)
+  if scroll_state_x == SCROLL_COASTING then {
+    let base_x = 0.95
+    var decay_x = base_x * base_x * base_x
+    if dt * 60.0 < 1.5 then { decay_x = base_x } else ()
+    if dt * 60.0 > 2.5 then { decay_x = base_x * base_x * base_x * base_x } else ()
+    scroll_vel_x = scroll_vel_x * decay_x
+    scroll_pos_x = scroll_pos_x + scroll_vel_x * dt
+    if scroll_is_overscrolled_x() then {
+      scroll_state_x = SCROLL_BOUNCING
+      scroll_vel_x = scroll_vel_x * 0.15
+    } else if float.abs(scroll_vel_x) < 0.5 then {
+      scroll_state_x = SCROLL_IDLE
+    } else ()
+  } else if scroll_state_x == SCROLL_BOUNCING then {
+    let target_x = if scroll_pos_x < scroll_min_bound_x then scroll_min_bound_x else 0.0
+    let disp_x = scroll_pos_x - target_x
+    let force_x = 0.0 - 100.0 * disp_x - 20.0 * scroll_vel_x
+    scroll_vel_x = scroll_vel_x + force_x * dt
+    scroll_pos_x = scroll_pos_x + scroll_vel_x * dt
+    scroll_pos_x = float.max(scroll_min_bound_x - 120.0, float.min(120.0, scroll_pos_x))
+    if float.abs(disp_x) < 0.5 and float.abs(scroll_vel_x) < 0.5 then {
+      scroll_pos_x = target_x
+      scroll_vel_x = 0.0
+      scroll_state_x = SCROLL_IDLE
+    } else ()
+  } else ()
+
   draw_at_scroll()
-  if scroll_state != SCROLL_IDLE then 1 else 0
+  if scroll_state != SCROLL_IDLE or scroll_state_x != SCROLL_IDLE then 1 else 0
 }
 
 // ── Legacy one-shot render (backwards compat) ──

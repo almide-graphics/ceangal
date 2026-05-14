@@ -1,10 +1,7 @@
-// snaidhm Phase 1 — Tiled path renderer (with content-space scroll)
-//
-// CPU: flatten + coarse tile assignment (content-space tiles)
-// GPU: fine rasterize (screen pixel → content tile lookup via scroll_y)
+// snaidhm Phase 1 — Tiled path renderer (content-space 2D scroll)
 
 const TILE_SIZE: u32 = 16u;
-const MAX_SEGS_PER_TILE: u32 = 64u;
+const MAX_SEGS_PER_TILE: u32 = 512u;
 
 struct LineSeg {
   p0: vec2<f32>,
@@ -17,14 +14,18 @@ struct LineSeg {
 }
 
 struct Params {
-  width: u32,            // viewport width (pixels)
-  height: u32,           // viewport height (pixels)
+  width: u32,
+  height: u32,
   seg_count: u32,
-  tiles_x: u32,
-  content_tiles_y: u32,  // tile rows covering full content
+  content_tiles_x: u32,
+  content_tiles_y: u32,
   shadow_count: u32,
   num_paths: u32,
-  scroll_y: f32,         // scroll offset in pixels (negative = scrolled down)
+  scroll_y: f32,
+  scroll_x: f32,
+  _pad0: u32,
+  _pad1: u32,
+  _pad2: u32,
 }
 
 struct Shadow {
@@ -69,7 +70,7 @@ fn evaluate_paint(paint: Paint, p: vec2<f32>) -> vec4<f32> {
 @group(0) @binding(6) var<storage, read>       paints: array<Paint>;
 @group(0) @binding(7) var<storage, read>       tile_cmds: array<u32>;
 
-const MAX_CMDS_PER_TILE: u32 = 16u;
+const MAX_CMDS_PER_TILE: u32 = 32u;
 
 fn seg_area(p0: vec2<f32>, p1: vec2<f32>) -> f32 {
   let y = p0.y;
@@ -113,18 +114,21 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
   if (px >= params.width || py >= params.height) { return; }
 
   // Map screen pixel to content pixel via scroll offset
+  let content_px = f32(px) - params.scroll_x;
   let content_py = f32(py) - params.scroll_y;
+  let max_content_px = f32(params.content_tiles_x * TILE_SIZE);
   let max_content_py = f32(params.content_tiles_y * TILE_SIZE);
 
   // Outside content bounds → background
-  if content_py < 0.0 || content_py >= max_content_py {
+  if content_px < 0.0 || content_px >= max_content_px || content_py < 0.0 || content_py >= max_content_py {
     pixels[py * params.width + px] = pack_color(0.08, 0.08, 0.10, 1.0);
     return;
   }
 
   // Content-space tile lookup (per-pixel)
+  let content_tile_x = u32(content_px) / TILE_SIZE;
   let content_tile_y = u32(content_py) / TILE_SIZE;
-  let tile_id = content_tile_y * params.tiles_x + wg.x;
+  let tile_id = content_tile_y * params.content_tiles_x + content_tile_x;
 
   let cmd_count = min(tile_cmd_counts[tile_id], MAX_CMDS_PER_TILE);
   let tile_base = tile_id * MAX_SEGS_PER_TILE;
@@ -132,13 +136,12 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
 
   // Content-space NDC coordinate (for shadows + paint gradients)
   let p = vec2<f32>(
-    f32(px) / f32(params.width) * 2.0 - 1.0,
+    content_px / f32(params.width) * 2.0 - 1.0,
     1.0 - content_py / f32(params.height) * 2.0,
   );
 
   var color = vec3<f32>(0.08, 0.08, 0.10);
 
-  // Shadows
   for (var si = 0u; si < params.shadow_count; si++) {
     let shadow = shadows[si];
     let sp = p - vec2<f32>(shadow.offset_x, shadow.offset_y);
@@ -147,10 +150,9 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
     color = mix(color, shadow.color.rgb, shadow_alpha);
   }
 
-  // Path fills — segment coords shifted to content space
+  // Path fills — segment coords in content space
   let ndc_to_px = 0.5 * f32(params.width);
   let ndc_to_py = 0.5 * f32(params.height);
-  let px_f = f32(px);
 
   for (var ci = 0u; ci < cmd_count; ci++) {
     let cb = cmd_base + ci * 4u;
@@ -163,13 +165,12 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
     for (var si = 0u; si < seg_count; si++) {
       let seg_idx = tile_seg_ids[tile_base + seg_offset + si];
       let seg = segments[seg_idx];
-      // Segment NDC → viewport pixels, then subtract content pixel position
       let sp0 = vec2<f32>(
-        (seg.p0.x + 1.0) * ndc_to_px - px_f,
+        (seg.p0.x + 1.0) * ndc_to_px - content_px,
         (1.0 - seg.p0.y) * ndc_to_py - content_py,
       );
       let sp1 = vec2<f32>(
-        (seg.p1.x + 1.0) * ndc_to_px - px_f,
+        (seg.p1.x + 1.0) * ndc_to_px - content_px,
         (1.0 - seg.p1.y) * ndc_to_py - content_py,
       );
       area += seg_area(sp0, sp1);
@@ -187,7 +188,7 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
   pixels[py * params.width + px] = pack_color(color.x, color.y, color.z, 1.0);
 }
 
-// Fullscreen quad (unchanged)
+// Fullscreen quad
 
 struct VSOut {
   @builtin(position) pos: vec4<f32>,
