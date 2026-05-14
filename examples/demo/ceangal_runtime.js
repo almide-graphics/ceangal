@@ -371,7 +371,7 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
     if (instance.exports.do_render) {
       instance.exports.do_render(
         B(h(_device)), B(cw), B(ch), B(pw), B(ph),
-        B(imgHandles.vtx), B(imgHandles.idx), B(imgHandles.count),
+        B(imgHandles.vtx), B(imgHandles.idx), B(0),  // no images for Yoga sample
         B(imgHandles.tex), B(imgHandles.samp),
       );
     }
