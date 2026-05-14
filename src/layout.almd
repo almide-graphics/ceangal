@@ -455,36 +455,90 @@ fn build_lines(node: Node, inner_main: Float) -> List[FlexLine] = {
 fn resolve_line_flex(node: Node, line: FlexLine, inner_main: Float) -> FlexLine = {
   let dir = node.direction
   let n_items = list.len(line.items)
-  let gap_total = node.gap_main * int.to_float(int.max(0, n_items - 1))
-  let remaining = inner_main - line.main_used
+  let remaining_init = inner_main - line.main_used
 
-  var total_grow = 0.0
-  var total_shrink_scaled = 0.0
+  // Two-pass flex resolution with min/max clamping (Yoga §9.7 simplified)
+  // Pass 1: compute flex, clamp, identify frozen items
+  var mains: List[Float] = []
+  var frozen: List[Bool] = []
+  var frozen_space = 0.0
+
+  var tg1 = 0.0
+  var tss1 = 0.0
   for item in line.items {
     let child = node.children[item.idx]
-    total_grow = total_grow + child.grow
-    total_shrink_scaled = total_shrink_scaled + child.shrink * item.basis
+    tg1 = tg1 + child.grow
+    tss1 = tss1 + child.shrink * item.basis
   }
 
+  var margin_total = 0.0
+  var basis_total = 0.0
+  for item in line.items {
+    margin_total = margin_total + mar_main(node.children[item.idx], dir)
+    basis_total = basis_total + item.basis
+  }
+  let gap_total = node.gap_main * int.to_float(int.max(0, n_items - 1))
+  let rem1 = inner_main - basis_total - margin_total - gap_total
+
+  for ii in 0..n_items {
+    let item = line.items[ii]
+    let child = node.children[item.idx]
+    let b = item.basis
+    let delta = if rem1 > 0.0 and tg1 > 0.0 then rem1 * child.grow / tg1
+                else if rem1 < 0.0 and tss1 > 0.0 and child.shrink > 0.0 then rem1 * (child.shrink * b) / tss1
+                else 0.0
+    let target = float.max(0.0, b + delta)
+    let lo = if is_row(dir) then child.min_width else child.min_height
+    let hi = if is_row(dir) then child.max_width else child.max_height
+    let clamped = clamp_dim(target, lo, hi)
+    mains = mains + [clamped]
+    if float.abs(clamped - target) > 0.01 then {
+      frozen = frozen + [true]
+      frozen_space = frozen_space + clamped
+    } else {
+      frozen = frozen + [false]
+    }
+  }
+
+  // Pass 2: redistribute space among unfrozen items
+  var tg2 = 0.0
+  var tss2 = 0.0
+  var ub2 = 0.0
+  for ii in 0..n_items {
+    if not frozen[ii] then {
+      let child = node.children[line.items[ii].idx]
+      let b = line.items[ii].basis
+      tg2 = tg2 + child.grow
+      tss2 = tss2 + child.shrink * b
+      ub2 = ub2 + b
+    } else ()
+  }
+  let rem2 = inner_main - frozen_space - ub2 - margin_total - gap_total
+  for ii in 0..n_items {
+    if not frozen[ii] then {
+      let item = line.items[ii]
+      let child = node.children[item.idx]
+      let b = item.basis
+      let delta = if rem2 > 0.0 and tg2 > 0.0 then rem2 * child.grow / tg2
+                  else if rem2 < 0.0 and tss2 > 0.0 and child.shrink > 0.0 then rem2 * (child.shrink * b) / tss2
+                  else 0.0
+      let lo = if is_row(dir) then child.min_width else child.min_height
+      let hi = if is_row(dir) then child.max_width else child.max_height
+      mains[ii] = clamp_dim(float.max(0.0, b + delta), lo, hi)
+    } else ()
+  }
+
+  // Build result
   var new_items: List[FlexItem] = []
   var new_cross = 0.0
-  for item in line.items {
+  for ii in 0..n_items {
+    let item = line.items[ii]
     let child = node.children[item.idx]
-    let delta = if remaining > 0.0 and total_grow > 0.0 then
-                  remaining * child.grow / total_grow
-                else if remaining < 0.0 and total_shrink_scaled > 0.0 and child.shrink > 0.0 then
-                  remaining * (child.shrink * item.basis) / total_shrink_scaled
-                else 0.0
-    let m = clamp_dim(float.max(0.0, item.basis + delta),
-              if is_row(dir) then child.min_width else child.min_height,
-              if is_row(dir) then child.max_width else child.max_height)
-
-    // Recompute cross with final main
+    let m = mains[ii]
     let cs = compute_size(child,
       if is_row(dir) then m else UNDEFINED,
       if is_row(dir) then UNDEFINED else m)
     let cc = cross_of(cs, dir)
-
     new_items = new_items + [{ idx: item.idx, basis: item.basis, main: m, cross: cc }]
     new_cross = float.max(new_cross, cc + mar_cross(child, dir))
   }
