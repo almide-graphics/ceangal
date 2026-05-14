@@ -263,9 +263,9 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
 
   // Load shaders + font in parallel
   const [rasterCode, textCode, imageCode, fontBuffer] = await Promise.all([
-    fetch("./raster.wgsl").then(r => r.text()),
-    fetch("./text.wgsl").then(r => r.text()),
-    fetch("./image.wgsl").then(r => r.text()),
+    fetch("./raster.wgsl?v=" + Date.now()).then(r => r.text()),
+    fetch("./text.wgsl?v=" + Date.now()).then(r => r.text()),
+    fetch("./image.wgsl?v=" + Date.now()).then(r => r.text()),
     fetch("./font.ttf").then(r => r.arrayBuffer()),
   ]);
   SHADERS = [rasterCode, rasterCode, textCode, imageCode];
@@ -302,7 +302,17 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
 
   // WASM
   const wasi = new Proxy({}, { get(_, n) { if (n === "proc_exit") return () => {}; if (n === "fd_prestat_get") return () => 8; return () => 0; }});
-  const imports = { wasi_snapshot_preview1: wasi, dom: createDomImports(), gpu: createGpuImports(canvas), font: createFontImports() };
+  // Font data byte-level access (Almide TTF parser reads raw bytes)
+  const fontDataView = new DataView(fontBuffer);
+  const fontDataImports = {
+    len: () => B(fontBuffer.byteLength),
+    u8: (offset) => B(fontDataView.getUint8(Number(offset))),
+    u16be: (offset) => B(fontDataView.getUint16(Number(offset))),
+    i16be: (offset) => B(fontDataView.getInt16(Number(offset))),
+    u32be: (offset) => B(fontDataView.getUint32(Number(offset))),
+    i8: (offset) => B(fontDataView.getInt8(Number(offset))),
+  };
+  const imports = { wasi_snapshot_preview1: wasi, dom: createDomImports(), gpu: createGpuImports(canvas), font_data: fontDataImports };
   const { instance } = await WebAssembly.instantiate(await fetch(wasmUrl).then(r => r.arrayBuffer()), imports);
   _wasmMemory = instance.exports.memory;
 
@@ -311,7 +321,7 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   // 1. Render scene via snaidhm (GPU)
   if (instance.exports.do_render) {
     instance.exports.do_render(
-      B(h(_device)), B(h(sdfTexture)), B(h(sdfSampler)),
+      B(h(_device)),
       B(h(imgVertBuf)), B(h(imgIdxBuf)), B(imageQuads.indices.length),
       B(h(imgTexture)), B(h(imgSampler)),
     );

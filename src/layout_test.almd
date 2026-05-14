@@ -7,6 +7,10 @@ import self.layout as lay
 
 fn approx(a: Float, b: Float) -> Bool = float.abs(a - b) < 0.5
 
+// Local constants to avoid cross-module const resolution issues
+let UNDEF = -1.0
+let WRAP = 1
+
 // ════════════════════════════════════════
 // Flex Basis + Grow
 // ════════════════════════════════════════
@@ -92,11 +96,11 @@ test "yoga: flex_shrink_weighted_by_basis" {
 test "yoga: flex_direction_column_no_height" {
   // Root has no height — sizes to content
   let root = lay.col([
-    lay.leaf(lay.UNDEFINED, 10.0),
-    lay.leaf(lay.UNDEFINED, 10.0),
-    lay.leaf(lay.UNDEFINED, 10.0),
-  ]) |> lay.with_size(100.0, lay.UNDEFINED)
-  let r = lay.layout(root, 100.0, lay.UNDEFINED)
+    lay.leaf(UNDEF, 10.0),
+    lay.leaf(UNDEF, 10.0),
+    lay.leaf(UNDEF, 10.0),
+  ]) |> lay.with_size(100.0, UNDEF)
+  let r = lay.layout(root, 100.0, UNDEF)
   assert(approx(r[0].h, 30.0))
   assert(approx(r[1].h, 10.0))
   assert(approx(r[2].y, 10.0))
@@ -105,11 +109,11 @@ test "yoga: flex_direction_column_no_height" {
 
 test "yoga: flex_direction_row_no_width" {
   let root = lay.row([
-    lay.leaf(10.0, lay.UNDEFINED),
-    lay.leaf(10.0, lay.UNDEFINED),
-    lay.leaf(10.0, lay.UNDEFINED),
-  ]) |> lay.with_size(lay.UNDEFINED, 100.0)
-  let r = lay.layout(root, lay.UNDEFINED, 100.0)
+    lay.leaf(10.0, UNDEF),
+    lay.leaf(10.0, UNDEF),
+    lay.leaf(10.0, UNDEF),
+  ]) |> lay.with_size(UNDEF, 100.0)
+  let r = lay.layout(root, UNDEF, 100.0)
   assert(approx(r[0].w, 30.0))
   assert(approx(r[1].w, 10.0))
   assert(approx(r[2].x, 10.0))
@@ -145,7 +149,7 @@ test "yoga: display_none_fixed_size" {
 // ════════════════════════════════════════
 
 test "yoga: margin_start" {
-  let c = lay.leaf(10.0, lay.UNDEFINED) |> lay.with_margin({ top: 0.0, right: 0.0, bottom: 0.0, left: 10.0 })
+  let c = lay.leaf(10.0, UNDEF) |> lay.with_margin({ top: 0.0, right: 0.0, bottom: 0.0, left: 10.0 })
   let root = lay.row([c]) |> lay.with_size(100.0, 100.0)
   let r = lay.layout(root, 100.0, 100.0)
   assert(approx(r[1].x, 10.0))
@@ -153,7 +157,7 @@ test "yoga: margin_start" {
 }
 
 test "yoga: margin_top" {
-  let c = lay.leaf(lay.UNDEFINED, 10.0) |> lay.with_margin({ top: 10.0, right: 0.0, bottom: 0.0, left: 0.0 })
+  let c = lay.leaf(UNDEF, 10.0) |> lay.with_margin({ top: 10.0, right: 0.0, bottom: 0.0, left: 0.0 })
   let root = lay.col([c]) |> lay.with_size(100.0, 100.0)
   let r = lay.layout(root, 100.0, 100.0)
   assert(approx(r[1].y, 10.0))
@@ -161,7 +165,7 @@ test "yoga: margin_top" {
 }
 
 test "yoga: margin_end_with_justify_end" {
-  let c = lay.leaf(10.0, lay.UNDEFINED) |> lay.with_margin({ top: 0.0, right: 10.0, bottom: 0.0, left: 0.0 })
+  let c = lay.leaf(10.0, UNDEF) |> lay.with_margin({ top: 0.0, right: 10.0, bottom: 0.0, left: 0.0 })
   let root = lay.row([c]) |> lay.with_size(100.0, 100.0) |> lay.with_justify(lay.JUSTIFY_END)
   let r = lay.layout(root, 100.0, 100.0)
   assert(approx(r[1].x, 80.0))  // 100 - 10 - 10(margin)
@@ -188,28 +192,28 @@ test "yoga: margin_and_flex_column" {
 // ════════════════════════════════════════
 
 test "yoga: max_width" {
-  let c = lay.leaf(lay.UNDEFINED, 10.0) |> lay.with_max_size(50.0, lay.UNDEFINED)
+  let c = lay.leaf(UNDEF, 10.0) |> lay.with_max_size(50.0, UNDEF)
   let root = lay.col([c]) |> lay.with_size(100.0, 100.0)
   let r = lay.layout(root, 100.0, 100.0)
   assert(approx(r[1].w, 50.0))
 }
 
 test "yoga: max_height" {
-  let c = lay.leaf(10.0, lay.UNDEFINED) |> lay.with_max_size(lay.UNDEFINED, 50.0)
+  let c = lay.leaf(10.0, UNDEF) |> lay.with_max_size(UNDEF, 50.0)
   let root = lay.row([c]) |> lay.with_size(100.0, 100.0)
   let r = lay.layout(root, 100.0, 100.0)
   assert(approx(r[1].h, 50.0))
 }
 
 test "yoga: min_width" {
-  let c = lay.leaf(lay.UNDEFINED, 10.0) |> lay.with_min_size(50.0, 0.0)
+  let c = lay.leaf(UNDEF, 10.0) |> lay.with_min_size(50.0, 0.0)
   let root = lay.col([c]) |> lay.with_size(30.0, 100.0)
   let r = lay.layout(root, 30.0, 100.0)
   assert(approx(r[1].w, 50.0))
 }
 
 test "yoga: flex_grow_within_max_width" {
-  let c = lay.node_defaults() |> lay.with_grow(1.0) |> lay.with_max_size(50.0, lay.UNDEFINED)
+  let c = lay.node_defaults() |> lay.with_grow(1.0) |> lay.with_max_size(50.0, UNDEF)
   let root = lay.row([c]) |> lay.with_size(100.0, 100.0)
   let r = lay.layout(root, 100.0, 100.0)
   assert(approx(r[1].w, 50.0))
@@ -221,9 +225,9 @@ test "yoga: flex_grow_within_max_width" {
 
 test "yoga: column_gap_inflexible" {
   let root = lay.row([
-    lay.leaf(20.0, lay.UNDEFINED),
-    lay.leaf(20.0, lay.UNDEFINED),
-    lay.leaf(20.0, lay.UNDEFINED),
+    lay.leaf(20.0, UNDEF),
+    lay.leaf(20.0, UNDEF),
+    lay.leaf(20.0, UNDEF),
   ]) |> lay.with_size(80.0, 100.0) |> lay.with_gap(10.0)
   let r = lay.layout(root, 80.0, 100.0)
   assert(approx(r[1].x, 0.0))
@@ -250,8 +254,8 @@ test "yoga: wrap_row" {
   let root = lay.row([
     lay.leaf(30.0, 30.0), lay.leaf(30.0, 30.0),
     lay.leaf(30.0, 30.0), lay.leaf(30.0, 30.0),
-  ]) |> lay.with_size(100.0, lay.UNDEFINED) |> lay.with_wrap(lay.WRAP_WRAP)
-  let r = lay.layout(root, 100.0, lay.UNDEFINED)
+  ]) |> lay.with_size(100.0, UNDEF) |> lay.with_wrap(WRAP)
+  let r = lay.layout(root, 100.0, UNDEF)
   // 3 fit in first row (30*3=90 < 100), 4th wraps to second row
   assert(approx(r[0].h, 60.0))
   assert(approx(r[1].x, 0.0))

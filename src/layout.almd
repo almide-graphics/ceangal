@@ -248,7 +248,7 @@ fn with_align_self(n: Node, v: Int) -> Node =
     n.display, n.children)
 
 fn with_wrap(n: Node, v: Int) -> Node =
-  set_field(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+  set_field(n, n.direction, v, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
     n.padding, n.margin, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
@@ -350,69 +350,41 @@ fn compute_size(node: Node, avail_w: Float, avail_h: Float) -> Size = {
     } else {
       let inner_m = if is_defined(am) then am - pm else UNDEFINED
 
-      // Collect bases
-      var bases: List[Float] = []
-      var total_basis = 0.0
-      var total_grow = 0.0
-      var total_shrink_scaled = 0.0
-      var visible = 0
-      for child in node.children {
-        if child.display == DISPLAY_NONE then {
-          bases = bases + [0.0]
-        } else {
-          let b = if is_defined(child.basis) then child.basis
-                  else {
-                    let caw = if is_row(dir) then inner_m else (if is_defined(ac) then ac - pc - mar_cross(child, dir) else UNDEFINED)
-                    let cah = if is_row(dir) then (if is_defined(ac) then ac - pc - mar_cross(child, dir) else UNDEFINED) else inner_m
-                    let cs = compute_size(child, caw, cah)
-                    main_of(cs, dir)
-                  }
-          bases = bases + [b]
-          total_basis = total_basis + b + mar_main(child, dir)
-          total_grow = total_grow + child.grow
-          total_shrink_scaled = total_shrink_scaled + child.shrink * b
-          visible = visible + 1
+      // Use line-based computation (handles both wrap and nowrap)
+      let lines = build_lines(node, if is_defined(inner_m) then inner_m else 99999.0)
+      let n_lines = list.len(lines)
+
+      // Resolve flex per line
+      var resolved_lines: List[FlexLine] = []
+      if is_defined(inner_m) then {
+        for ln in lines {
+          resolved_lines = resolved_lines + [resolve_line_flex(node, ln, inner_m)]
         }
+      } else {
+        resolved_lines = lines  // no flex without definite main size
       }
 
-      let gap_total = node.gap_main * int.to_float(int.max(0, visible - 1))
-      total_basis = total_basis + gap_total
-
-      let remaining = if is_defined(inner_m) then inner_m - total_basis else 0.0
-
-      // Resolve flex
-      var mains: List[Float] = []
-      var max_cross = 0.0
-      for i in 0..n_ch {
-        let child = node.children[i]
-        if child.display == DISPLAY_NONE then {
-          mains = mains + [0.0]
-        } else {
-          let b = bases[i]
-          let delta = if remaining > 0.0 and total_grow > 0.0 then
-                        remaining * child.grow / total_grow
-                      else if remaining < 0.0 and total_shrink_scaled > 0.0 and child.shrink > 0.0 then
-                        remaining * (child.shrink * b) / total_shrink_scaled
-                      else 0.0
-          let m = clamp_dim(float.max(0.0, b + delta),
-                    if is_row(dir) then child.min_width else child.min_height,
-                    if is_row(dir) then child.max_width else child.max_height)
-          mains = mains + [m]
-
-          let cca = if is_defined(ac) then ac - pc - mar_cross(child, dir) else UNDEFINED
-          let cs = compute_size(child,
-            if is_row(dir) then m else cca,
-            if is_row(dir) then cca else m)
-          max_cross = float.max(max_cross, cross_of(cs, dir) + mar_cross(child, dir))
+      // Compute container size from lines
+      var max_line_main = 0.0
+      var total_cross = 0.0
+      for li in 0..n_lines {
+        let ln = resolved_lines[li]
+        var line_main = 0.0
+        let n_items = list.len(ln.items)
+        for item in ln.items {
+          line_main = line_main + item.main + mar_main(node.children[item.idx], dir)
         }
+        line_main = line_main + node.gap_main * int.to_float(int.max(0, n_items - 1))
+        max_line_main = float.max(max_line_main, line_main)
+        total_cross = total_cross + ln.cross_size
       }
+      let cross_gaps = node.gap_cross * int.to_float(int.max(0, n_lines - 1))
+      total_cross = total_cross + cross_gaps
 
-      let content_m = list.fold(mains, 0.0, (a, v) => a + v) + gap_total
-                      + list.fold(node.children, 0.0, (a, c) => a + (if c.display == DISPLAY_NONE then 0.0 else mar_main(c, dir)))
       let rm = if is_defined(node_main(node)) then node_main(node)
-               else clamp_dim(content_m + pm, node_main_min(node), node_main_max(node))
+               else clamp_dim(max_line_main + pm, node_main_min(node), node_main_max(node))
       let rc = if is_defined(node_cross(node)) then node_cross(node)
-               else clamp_dim(max_cross + pc, node_cross_min(node), node_cross_max(node))
+               else clamp_dim(total_cross + pc, node_cross_min(node), node_cross_max(node))
       make_size(rm, rc, dir)
     }
   }
@@ -434,11 +406,13 @@ fn build_lines(node: Node, inner_main: Float) -> List[FlexLine] = {
   for i in 0..n_ch {
     let child = node.children[i]
     if child.display == DISPLAY_NONE then () else {
+      // Basis: explicit basis or child's CONTENT size (not available-filling)
       let b = if is_defined(child.basis) then child.basis
               else {
+                // Pass UNDEFINED on main axis → child returns content size, not fill
                 let cs = compute_size(child,
-                  if is_row(dir) then inner_main else UNDEFINED,
-                  if is_row(dir) then UNDEFINED else inner_main)
+                  if is_row(dir) then UNDEFINED else UNDEFINED,
+                  if is_row(dir) then UNDEFINED else UNDEFINED)
                 main_of(cs, dir)
               }
       let item_main = b + mar_main(child, dir)
@@ -572,8 +546,10 @@ fn layout_line(node: Node, line: FlexLine, inner_main: Float, inner_cross: Float
 
     let cx = if is_row(dir) then origin_main + cursor else origin_cross + co
     let cy = if is_row(dir) then origin_cross + co else origin_main + cursor
-    let cw = if is_row(dir) then item.main else child_cross
-    let ch = if is_row(dir) then child_cross else item.main
+    let raw_cw = if is_row(dir) then item.main else child_cross
+    let raw_ch = if is_row(dir) then child_cross else item.main
+    let cw = clamp_dim(raw_cw, child.min_width, child.max_width)
+    let ch = clamp_dim(raw_ch, child.min_height, child.max_height)
 
     let sub = do_layout(child, cx, cy, cw, ch)
     rects = rects + sub

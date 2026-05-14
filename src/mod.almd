@@ -4,6 +4,7 @@
 // Almide computes positions and describes elements; JS runtime creates DOM.
 
 import self.dom as dom
+import self.layout as layout
 import snaidhm
 
 // ── String helper ──
@@ -159,68 +160,100 @@ fn init_overlay(overlay: Int, canvas_w: Int, canvas_h: Int) -> Unit = {
   }
 }
 
-// ── Render scene via snaidhm ──
+// Local constant (cross-module let workaround)
+let AUTO = -1.0
+
+// ── Layout → NDC conversion ──
+// Layout engine works in pixels (0,0 = top-left). snaidhm uses NDC (-1..1).
+
+fn px_to_ndc_x(px: Float, vw: Float) -> Float = px / vw * 2.0 - 1.0
+fn px_to_ndc_y(px: Float, vh: Float) -> Float = 1.0 - px / vh * 2.0
+fn px_to_ndc_w(px: Float, vw: Float) -> Float = px / vw * 2.0
+fn px_to_ndc_h(px: Float, vh: Float) -> Float = px / vh * 2.0
+
+// ── Render scene via snaidhm (layout-driven) ──
 
 @export(wasm, "render_scene")
 fn do_render(device: Int, img_vtx: Int, img_idx: Int, img_count: Int, img_texture: Int, img_sampler: Int) -> Unit = {
-  let dc = [0.5, 0.5, 0.5, 1.0]
+  let vw = 512.0
+  let vh = 512.0
 
-  let shape_cubics =
-    snaidhm.round_rect_cubics(-0.9, -0.9, 1.8, 1.8, 0.08, dc, 0)
-    + snaidhm.round_rect_cubics(-0.85, 0.55, 1.7, 0.3, 0.04, dc, 1)
-    + snaidhm.circle_cubics(-0.5, 0.0, 0.18, dc, 2)
-    + snaidhm.circle_cubics(0.0, 0.0, 0.18, dc, 3)
-    + snaidhm.circle_cubics(0.5, 0.0, 0.18, dc, 4)
-    + snaidhm.round_rect_cubics(-0.85, -0.85, 0.5, 0.55, 0.04, dc, 5)
-    + snaidhm.round_rect_cubics(-0.3, -0.85, 0.5, 0.55, 0.04, dc, 6)
-    + snaidhm.round_rect_cubics(0.25, -0.85, 0.6, 0.55, 0.04, dc, 7)
-
-  let shadows = [
-    snaidhm.rect_shadow(-0.9, -0.9, 1.8, 1.8, 0.08, 0.01, -0.02, 0.08, [0.0,0.0,0.0,0.2]),
-    snaidhm.circ_shadow(-0.5, 0.0, 0.18, 0.008, -0.015, 0.04, [0.0,0.0,0.0,0.25]),
-    snaidhm.circ_shadow(0.0, 0.0, 0.18, 0.008, -0.015, 0.04, [0.0,0.0,0.0,0.25]),
-    snaidhm.circ_shadow(0.5, 0.0, 0.18, 0.008, -0.015, 0.04, [0.0,0.0,0.0,0.25]),
-    snaidhm.rect_shadow(-0.85, -0.85, 0.5, 0.55, 0.04, 0.005, -0.01, 0.03, [0.0,0.0,0.0,0.15]),
-    snaidhm.rect_shadow(-0.3, -0.85, 0.5, 0.55, 0.04, 0.005, -0.01, 0.03, [0.0,0.0,0.0,0.15]),
-    snaidhm.rect_shadow(0.25, -0.85, 0.6, 0.55, 0.04, 0.005, -0.01, 0.03, [0.0,0.0,0.0,0.15]),
+  // ── Build layout tree ──
+  let colors = [
+    [1.0, 1.0, 1.0, 1.0],      // 0: card bg
+    [0.20, 0.35, 0.75, 1.0],    // 1: header
+    [0.90, 0.35, 0.30, 1.0],    // 2: red
+    [0.30, 0.75, 0.40, 1.0],    // 3: green
+    [0.35, 0.55, 0.90, 1.0],    // 4: blue
+    [0.93, 0.93, 0.96, 1.0],    // 5: card a
+    [0.93, 0.93, 0.96, 1.0],    // 6: card b
+    [0.93, 0.93, 0.96, 1.0],    // 7: card c
   ]
 
-  let shape_paints = [
-    snaidhm.solid(1.0, 1.0, 1.0, 1.0),
-    snaidhm.linear_grad([0.12,0.22,0.58,1.0], [0.28,0.48,0.88,1.0], -0.85, 0.85, -0.85, 0.55),
-    snaidhm.radial_grad([1.0,0.55,0.5,0.9], [0.82,0.18,0.12,0.9], -0.5, 0.0, 0.18),
-    snaidhm.radial_grad([0.45,0.92,0.55,0.9], [0.12,0.62,0.22,0.9], 0.0, 0.0, 0.18),
-    snaidhm.radial_grad([0.5,0.7,1.0,0.9], [0.15,0.35,0.82,0.9], 0.5, 0.0, 0.18),
-    snaidhm.solid(0.95, 0.95, 0.98, 1.0),
-    snaidhm.solid(0.95, 0.95, 0.98, 1.0),
-    snaidhm.solid(0.95, 0.95, 0.98, 1.0),
-  ]
+  let header = layout.leaf(AUTO, 80.0)
+  let circle_row = layout.row([
+    layout.leaf(90.0, 90.0),
+    layout.leaf(90.0, 90.0),
+    layout.leaf(90.0, 90.0),
+  ]) |> layout.with_justify(5) |> layout.with_align(2)
+     |> layout.with_size(AUTO, 160.0)
+  let card_row = layout.row([
+    layout.leaf(AUTO, 120.0) |> layout.with_grow(1.0),
+    layout.leaf(AUTO, 120.0) |> layout.with_grow(1.0),
+    layout.leaf(AUTO, 120.0) |> layout.with_grow(1.0),
+  ]) |> layout.with_gap(12.0)
+  let root = layout.col([header, circle_row, card_row])
+    |> layout.with_padding(layout.edges_all(16.0))
+    |> layout.with_gap(16.0)
+    |> layout.with_size(vw, vh)
 
-  let center = snaidhm.ALIGN_CENTER
-  let left = snaidhm.ALIGN_LEFT
-  let text_specs = [
-    snaidhm.text_spec(snaidhm.str("snaidhm"),               40.0, 0.0,   0.64,  center, [1.0,1.0,1.0,1.0]),
-    snaidhm.text_spec(snaidhm.str("Almide > WASM > WebGPU"), 13.0, 0.0,   0.57,  center, [0.8,0.85,1.0,0.9]),
-    snaidhm.text_spec(snaidhm.str("Red"),                    13.0, -0.5,  -0.02, center, [1.0,1.0,1.0,1.0]),
-    snaidhm.text_spec(snaidhm.str("Green"),                  13.0, 0.0,   -0.02, center, [1.0,1.0,1.0,1.0]),
-    snaidhm.text_spec(snaidhm.str("Blue"),                   13.0, 0.5,   -0.02, center, [1.0,1.0,1.0,1.0]),
-    snaidhm.text_spec(snaidhm.str("Card A"),                 11.0, -0.8,  -0.4,  left,   [0.3,0.3,0.4,1.0]),
-    snaidhm.text_spec(snaidhm.str("Card B"),                 11.0, -0.25, -0.4,  left,   [0.3,0.3,0.4,1.0]),
-    snaidhm.text_spec(snaidhm.str("Card C"),                 11.0, 0.3,   -0.4,  left,   [0.3,0.3,0.4,1.0]),
-    snaidhm.text_spec(snaidhm.str("Shapes + Text"),          16.0, 0.0,   -0.68, center, [0.5,0.5,0.6,1.0]),
-    snaidhm.text_spec(snaidhm.str("all from Almide"),        16.0, 0.0,   -0.78, center, [0.5,0.5,0.6,1.0]),
-  ]
+  let rects = layout.layout(root, vw, vh)
 
-  let text = snaidhm.build_text_cubics(text_specs)
-  let num_shape_paints = list.len(shape_paints)
-  var text_cubics: List[snaidhm.Cubic] = []
-  for cub in text.cubics {
-    text_cubics = text_cubics + [{
-      a: cub.a, b: cub.b, c: cub.c, d: cub.d,
-      color: cub.color, path_id: cub.path_id + num_shape_paints
-    }]
+  // Debug: log rect count and positions
+  dom.log(s("rects: " + int.to_string(list.len(rects))))
+  for di in 0..int.min(list.len(rects), 10) {
+    dom.log(s("  [" + int.to_string(di) + "] x=" + int.to_string(float.to_int(rects[di].x))
+              + " y=" + int.to_string(float.to_int(rects[di].y))
+              + " w=" + int.to_string(float.to_int(rects[di].w))
+              + " h=" + int.to_string(float.to_int(rects[di].h))))
   }
 
-  snaidhm.render_scene(device, shape_cubics + text_cubics, shadows, shape_paints + text.paints,
+  // rects: [root, header, circle_row, c0, c1, c2, card_row, card_a, card_b, card_c]
+
+  // ── Convert layout rects → snaidhm cubics ──
+  // Skip root (idx 0) and container nodes (circle_row=2, card_row=6)
+  // Render: header(1), circles(3,4,5), cards(7,8,9)
+  let render_map = [1, 3, 4, 5, 7, 8, 9]
+  let radii =      [0.02, 0.5, 0.5, 0.5, 0.02, 0.02, 0.02]  // circles get r=0.5 (circle shape)
+
+  var cubics: List[snaidhm.Cubic] = []
+  var paints: List[snaidhm.Paint] = []
+  var shadows: List[snaidhm.Shadow] = []
+  let dc = [0.5, 0.5, 0.5, 1.0]
+
+  for pi in 0..list.len(render_map) {
+    let ri = render_map[pi]
+    let rect = rects[ri]
+    let nx = px_to_ndc_x(rect.x, vw)
+    let ny = px_to_ndc_y(rect.y + rect.h, vh)  // bottom-left in NDC
+    let nw = px_to_ndc_w(rect.w, vw)
+    let nh = px_to_ndc_h(rect.h, vh)
+    let r = radii[pi]
+
+    // Use circle_cubics for circles, round_rect for others
+    if r > 0.1 then {
+      let cx = nx + nw / 2.0
+      let cy = ny + nh / 2.0
+      let rad = float.min(nw, nh) / 2.0
+      cubics = cubics + snaidhm.circle_cubics(cx, cy, rad, dc, pi)
+      shadows = shadows + [snaidhm.circ_shadow(cx, cy, rad, 0.008, -0.015, 0.04, [0.0,0.0,0.0,0.2])]
+    } else {
+      cubics = cubics + snaidhm.round_rect_cubics(nx, ny, nw, nh, r, dc, pi)
+      shadows = shadows + [snaidhm.rect_shadow(nx, ny, nw, nh, r, 0.005, -0.01, 0.03, [0.0,0.0,0.0,0.15])]
+    }
+    paints = paints + [snaidhm.solid(colors[pi + 1][0], colors[pi + 1][1], colors[pi + 1][2], colors[pi + 1][3])]
+  }
+
+  snaidhm.render_scene(device, cubics, shadows, paints,
     img_vtx, img_idx, img_count, img_texture, img_sampler)
 }

@@ -4,7 +4,7 @@
 // GPU: fine rasterize (per-tile winding number fill)
 
 const TILE_SIZE: u32 = 16u;
-const MAX_SEGS_PER_TILE: u32 = 64u;
+const MAX_SEGS_PER_TILE: u32 = 512u;
 
 struct LineSeg {
   p0: vec2<f32>,
@@ -23,7 +23,7 @@ struct Params {
   tiles_x: u32,
   tiles_y: u32,
   shadow_count: u32,
-  _pad1: u32,
+  num_paths: u32,
   _pad2: u32,
 }
 
@@ -65,14 +65,17 @@ fn evaluate_paint(paint: Paint, p: vec2<f32>) -> vec4<f32> {
   return paint.color0;
 }
 
-// Fine rasterize: per-tile winding fill
+// Fine rasterize: per-tile winding fill (command-list driven)
 @group(0) @binding(0) var<storage, read>       segments: array<LineSeg>;
-@group(0) @binding(1) var<storage, read>       tile_counts: array<u32>;
+@group(0) @binding(1) var<storage, read>       tile_cmd_counts: array<u32>;
 @group(0) @binding(2) var<storage, read>       tile_seg_ids: array<u32>;
 @group(0) @binding(3) var<storage, read_write> pixels: array<u32>;
 @group(0) @binding(4) var<uniform>             params: Params;
 @group(0) @binding(5) var<storage, read>       shadows: array<Shadow>;
 @group(0) @binding(6) var<storage, read>       paints: array<Paint>;
+@group(0) @binding(7) var<storage, read>       tile_cmds: array<u32>;
+
+const MAX_CMDS_PER_TILE: u32 = 32u;
 
 // Analytical area coverage (Vello-style)
 // p0, p1 in pixel-local coordinates where pixel occupies [0,1] x [0,1]
@@ -125,8 +128,9 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
   if (px >= params.width || py >= params.height) { return; }
 
   let tile_id = wg.y * params.tiles_x + wg.x;
-  let count = min(tile_counts[tile_id], MAX_SEGS_PER_TILE);
+  let cmd_count = min(tile_cmd_counts[tile_id], MAX_CMDS_PER_TILE);
   let tile_base = tile_id * MAX_SEGS_PER_TILE;
+  let cmd_base = tile_id * MAX_CMDS_PER_TILE * 4u;
 
   let p = vec2<f32>(
     f32(px) / f32(params.width) * 2.0 - 1.0,
@@ -144,48 +148,39 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
     color = mix(color, shadow.color.rgb, shadow_alpha);
   }
 
-  // ── Path fills (analytical area coverage) ──
-  // NDC → pixel coordinate scale factors
+  // ── Path fills (command-list driven) ──
   let ndc_to_px = 0.5 * f32(params.width);
   let ndc_to_py = 0.5 * f32(params.height);
   let px_f = f32(px);
   let py_f = f32(py);
 
-  var area = 0.0;
-  var current_path = 0xFFFFFFFFu;
+  for (var ci = 0u; ci < cmd_count; ci++) {
+    let cb = cmd_base + ci * 4u;
+    let path_id = tile_cmds[cb];
+    let backdrop = bitcast<i32>(tile_cmds[cb + 1u]);
+    let seg_offset = tile_cmds[cb + 2u];
+    let seg_count = tile_cmds[cb + 3u];
 
-  for (var i = 0u; i < count; i++) {
-    let seg_idx = tile_seg_ids[tile_base + i];
-    let seg = segments[seg_idx];
-
-    if (seg.path_id != current_path) {
-      // Apply previous path with paint evaluation at this pixel
-      let coverage = min(abs(area), 1.0);
-      if coverage > 1e-4 {
-        let paint_color = evaluate_paint(paints[current_path], p);
-        color = mix(color, paint_color.rgb, coverage * paint_color.a);
-      }
-      area = 0.0;
-      current_path = seg.path_id;
+    var area = f32(backdrop);
+    for (var si = 0u; si < seg_count; si++) {
+      let seg_idx = tile_seg_ids[tile_base + seg_offset + si];
+      let seg = segments[seg_idx];
+      let sp0 = vec2<f32>(
+        (seg.p0.x + 1.0) * ndc_to_px - px_f,
+        (1.0 - seg.p0.y) * ndc_to_py - py_f,
+      );
+      let sp1 = vec2<f32>(
+        (seg.p1.x + 1.0) * ndc_to_px - px_f,
+        (1.0 - seg.p1.y) * ndc_to_py - py_f,
+      );
+      area += seg_area(sp0, sp1);
     }
 
-    // Convert segment from NDC to pixel-local coordinates
-    let sp0 = vec2<f32>(
-      (seg.p0.x + 1.0) * ndc_to_px - px_f,
-      (1.0 - seg.p0.y) * ndc_to_py - py_f,
-    );
-    let sp1 = vec2<f32>(
-      (seg.p1.x + 1.0) * ndc_to_px - px_f,
-      (1.0 - seg.p1.y) * ndc_to_py - py_f,
-    );
-    area += seg_area(sp0, sp1);
-  }
-
-  // Apply last path
-  let last_coverage = min(abs(area), 1.0);
-  if last_coverage > 1e-4 {
-    let last_paint = evaluate_paint(paints[current_path], p);
-    color = mix(color, last_paint.rgb, last_coverage * last_paint.a);
+    let coverage = min(abs(area), 1.0);
+    if coverage > 1e-4 {
+      let paint_color = evaluate_paint(paints[path_id], p);
+      color = mix(color, paint_color.rgb, coverage * paint_color.a);
+    }
   }
 
   pixels[py * params.width + px] = pack_color(color.x, color.y, color.z, 1.0);
