@@ -162,10 +162,10 @@ fn init_overlay(overlay: Int, canvas_w: Int, canvas_h: Int) -> Unit = {
 // ── Render scene via snaidhm ──
 
 @export(wasm, "render_scene")
-fn do_render(device: Int, text_texture: Int, text_sampler: Int, img_vtx: Int, img_idx: Int, img_count: Int, img_texture: Int, img_sampler: Int) -> Unit = {
+fn do_render(device: Int, img_vtx: Int, img_idx: Int, img_count: Int, img_texture: Int, img_sampler: Int) -> Unit = {
   let dc = [0.5, 0.5, 0.5, 1.0]
 
-  let cubics =
+  let shape_cubics =
     snaidhm.round_rect_cubics(-0.9, -0.9, 1.8, 1.8, 0.08, dc, 0)
     + snaidhm.round_rect_cubics(-0.85, 0.55, 1.7, 0.3, 0.04, dc, 1)
     + snaidhm.circle_cubics(-0.5, 0.0, 0.18, dc, 2)
@@ -185,7 +185,7 @@ fn do_render(device: Int, text_texture: Int, text_sampler: Int, img_vtx: Int, im
     snaidhm.rect_shadow(0.25, -0.85, 0.6, 0.55, 0.04, 0.005, -0.01, 0.03, [0.0,0.0,0.0,0.15]),
   ]
 
-  let paints = [
+  let shape_paints = [
     snaidhm.solid(1.0, 1.0, 1.0, 1.0),
     snaidhm.linear_grad([0.12,0.22,0.58,1.0], [0.28,0.48,0.88,1.0], -0.85, 0.85, -0.85, 0.55),
     snaidhm.radial_grad([1.0,0.55,0.5,0.9], [0.82,0.18,0.12,0.9], -0.5, 0.0, 0.18),
@@ -198,19 +198,29 @@ fn do_render(device: Int, text_texture: Int, text_sampler: Int, img_vtx: Int, im
 
   let center = snaidhm.ALIGN_CENTER
   let left = snaidhm.ALIGN_LEFT
-  let text_lines = [
-    snaidhm.text_line(snaidhm.str("snaidhm"),               40.0, 0.0,   0.64,  center, [1.0,1.0,1.0,1.0]),
-    snaidhm.text_line(snaidhm.str("Almide > WASM > WebGPU"), 13.0, 0.0,   0.57,  center, [0.8,0.85,1.0,0.9]),
-    snaidhm.text_line(snaidhm.str("Red"),                    13.0, -0.5,  -0.02, center, [1.0,1.0,1.0,1.0]),
-    snaidhm.text_line(snaidhm.str("Green"),                  13.0, 0.0,   -0.02, center, [1.0,1.0,1.0,1.0]),
-    snaidhm.text_line(snaidhm.str("Blue"),                   13.0, 0.5,   -0.02, center, [1.0,1.0,1.0,1.0]),
-    snaidhm.text_line(snaidhm.str("Card A"),                 11.0, -0.8,  -0.4,  left,   [0.3,0.3,0.4,1.0]),
-    snaidhm.text_line(snaidhm.str("Card B"),                 11.0, -0.25, -0.4,  left,   [0.3,0.3,0.4,1.0]),
-    snaidhm.text_line(snaidhm.str("Card C"),                 11.0, 0.3,   -0.4,  left,   [0.3,0.3,0.4,1.0]),
-    snaidhm.text_line(snaidhm.str("Shapes + Text"),          16.0, 0.0,   -0.68, center, [0.5,0.5,0.6,1.0]),
-    snaidhm.text_line(snaidhm.str("all from Almide"),        16.0, 0.0,   -0.78, center, [0.5,0.5,0.6,1.0]),
+  let text_specs = [
+    snaidhm.text_spec(snaidhm.str("snaidhm"),               40.0, 0.0,   0.64,  center, [1.0,1.0,1.0,1.0]),
+    snaidhm.text_spec(snaidhm.str("Almide > WASM > WebGPU"), 13.0, 0.0,   0.57,  center, [0.8,0.85,1.0,0.9]),
+    snaidhm.text_spec(snaidhm.str("Red"),                    13.0, -0.5,  -0.02, center, [1.0,1.0,1.0,1.0]),
+    snaidhm.text_spec(snaidhm.str("Green"),                  13.0, 0.0,   -0.02, center, [1.0,1.0,1.0,1.0]),
+    snaidhm.text_spec(snaidhm.str("Blue"),                   13.0, 0.5,   -0.02, center, [1.0,1.0,1.0,1.0]),
+    snaidhm.text_spec(snaidhm.str("Card A"),                 11.0, -0.8,  -0.4,  left,   [0.3,0.3,0.4,1.0]),
+    snaidhm.text_spec(snaidhm.str("Card B"),                 11.0, -0.25, -0.4,  left,   [0.3,0.3,0.4,1.0]),
+    snaidhm.text_spec(snaidhm.str("Card C"),                 11.0, 0.3,   -0.4,  left,   [0.3,0.3,0.4,1.0]),
+    snaidhm.text_spec(snaidhm.str("Shapes + Text"),          16.0, 0.0,   -0.68, center, [0.5,0.5,0.6,1.0]),
+    snaidhm.text_spec(snaidhm.str("all from Almide"),        16.0, 0.0,   -0.78, center, [0.5,0.5,0.6,1.0]),
   ]
 
-  snaidhm.render_scene(device, cubics, shadows, paints, text_lines,
-    text_texture, text_sampler, img_vtx, img_idx, img_count, img_texture, img_sampler)
+  let text = snaidhm.build_text_cubics(text_specs)
+  let num_shape_paints = list.len(shape_paints)
+  var text_cubics: List[snaidhm.Cubic] = []
+  for cub in text.cubics {
+    text_cubics = text_cubics + [{
+      a: cub.a, b: cub.b, c: cub.c, d: cub.d,
+      color: cub.color, path_id: cub.path_id + num_shape_paints
+    }]
+  }
+
+  snaidhm.render_scene(device, shape_cubics + text_cubics, shadows, shape_paints + text.paints,
+    img_vtx, img_idx, img_count, img_texture, img_sampler)
 }
