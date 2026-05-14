@@ -345,8 +345,9 @@ fn compute_size(node: Node, avail_w: Float, avail_h: Float) -> Size = {
               else if is_defined(avail_w) then avail_w else 0.0
       let h = if is_defined(node.height) then node.height
               else if is_defined(avail_h) then avail_h else 0.0
-      { w: clamp_dim(w, node.min_width, node.max_width),
-        h: clamp_dim(h, node.min_height, node.max_height) }
+      // Do NOT apply min/max here — they inflate basis sizes.
+      // min/max are enforced in resolve_line_flex and layout_line.
+      { w: w, h: h }
     } else {
       let inner_m = if is_defined(am) then am - pm else UNDEFINED
 
@@ -500,7 +501,7 @@ fn resolve_line_flex(node: Node, line: FlexLine, inner_main: Float) -> FlexLine 
     }
   }
 
-  // Pass 2: redistribute space among unfrozen items
+  // Pass 2: redistribute space among unfrozen items (build new list to avoid mutation)
   var tg2 = 0.0
   var tss2 = 0.0
   var ub2 = 0.0
@@ -514,8 +515,11 @@ fn resolve_line_flex(node: Node, line: FlexLine, inner_main: Float) -> FlexLine 
     } else ()
   }
   let rem2 = inner_main - frozen_space - ub2 - margin_total - gap_total
+  var mains2: List[Float] = []
   for ii in 0..n_items {
-    if not frozen[ii] then {
+    if frozen[ii] then {
+      mains2 = mains2 + [mains[ii]]
+    } else {
       let item = line.items[ii]
       let child = node.children[item.idx]
       let b = item.basis
@@ -524,9 +528,10 @@ fn resolve_line_flex(node: Node, line: FlexLine, inner_main: Float) -> FlexLine 
                   else 0.0
       let lo = if is_row(dir) then child.min_width else child.min_height
       let hi = if is_row(dir) then child.max_width else child.max_height
-      mains[ii] = clamp_dim(float.max(0.0, b + delta), lo, hi)
-    } else ()
+      mains2 = mains2 + [clamp_dim(float.max(0.0, b + delta), lo, hi)]
+    }
   }
+  mains = mains2
 
   // Build result
   var new_items: List[FlexItem] = []

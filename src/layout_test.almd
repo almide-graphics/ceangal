@@ -344,8 +344,17 @@ test "yoga: align_items_flex_end_column" {
 // Min / Max (additional)
 // ════════════════════════════════════════
 
-// TODO: min_height multi-pass clamping not redistributing correctly
-// test "yoga: min_height_with_flex_grow" { ... }
+test "yoga: min_height_with_flex_grow" {
+  let c0 = lay.node_defaults() |> lay.with_grow(1.0) |> lay.with_min_size(0.0, 60.0)
+  let c1 = lay.node_defaults() |> lay.with_grow(1.0)
+  let root = lay.col([c0, c1]) |> lay.with_size(100.0, 100.0)
+  let r = lay.layout(root, 100.0, 100.0)
+  // c0 min=60 → clamped. c1 gets 40.
+  // Probe: narrow down actual value
+  assert(approx(r[1].h, 60.0))
+  assert(approx(r[2].y, 60.0))
+  assert(approx(r[2].h, 40.0))
+}
 
 test "yoga: max_height_with_flex_grow" {
   let root = lay.col([
