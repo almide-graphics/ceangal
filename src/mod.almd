@@ -127,40 +127,71 @@ fn cache_style_ids() -> List[Int] = [
 //  9        icon3
 
 fn build_demo_layout(font: ttf.Font, vw: Float, vh: Float) -> { rects: List[layout.LayoutRect], texts: List[TextEntry] } = {
-  let phone_w = vh * 0.4
-  let phone_h = vh * 0.76
+  let phone_w = vh * 0.38
+  let phone_h = vh * 0.82
 
-  // Text nodes with measured sizes
-  let title_node = text_leaf(font, "ceangal", 24.0, vh)
-  let sub_node = text_leaf(font, "Yoga Layout Demo", 11.0, vh)
-  let lbl1_node = text_leaf(font, "flex: 1", 12.0, vh)
-  let lbl2_node = text_leaf(font, "flex: 2", 12.0, vh)
+  let dark = [0.2, 0.2, 0.25, 1.0]
+  let mid = [0.55, 0.55, 0.6, 1.0]
+  let light = [0.85, 0.85, 0.88, 1.0]
+  let white = [1.0, 1.0, 1.0, 1.0]
+  let accent = [0.35, 0.6, 0.95, 1.0]
 
-  let header = layout.col([title_node, sub_node])
-    |> layout.with_padding(layout.edges_xy(8.0, 6.0))
-    |> layout.with_align(layout.ALIGN_CENTER) |> layout.with_justify(layout.JUSTIFY_CENTER)
-    |> layout.with_gap(2.0) |> layout.with_size(AUTO, 60.0)
+  // ── Status bar ──
+  //  idx 3: status_bar
+  //  idx 4: time_text, idx 5: signal_text
+  let status_bar = layout.row([
+    text_leaf(font, "9:41", 11.0, vh),
+    text_leaf(font, "100%", 11.0, vh),
+  ]) |> layout.with_justify(layout.JUSTIFY_BETWEEN) |> layout.with_align(layout.ALIGN_CENTER)
+     |> layout.with_padding(layout.edges_xy(12.0, 0.0)) |> layout.with_size(AUTO, 24.0)
 
-  let mid1 = layout.col([lbl1_node])
-    |> layout.with_grow(1.0) |> layout.with_margin(layout.edges_xy(10.0, 0.0))
-    |> layout.with_align(layout.ALIGN_CENTER) |> layout.with_justify(layout.JUSTIFY_CENTER)
+  // ── Album art (fills available space, padded) ──
+  //  idx 6: art_container, idx 7: album_art
+  let album_art = layout.leaf(AUTO, AUTO) |> layout.with_grow(1.0)
+  let art_container = layout.col([album_art])
+    |> layout.with_grow(1.0) |> layout.with_padding(layout.edges_all(20.0))
 
-  let mid2 = layout.col([lbl2_node])
-    |> layout.with_grow(2.0) |> layout.with_margin(layout.edges_xy(10.0, 0.0))
-    |> layout.with_align(layout.ALIGN_CENTER) |> layout.with_justify(layout.JUSTIFY_CENTER)
+  // ── Track info ──
+  //  idx 8: info_col, idx 9: title_text, idx 10: artist_text
+  let track_info = layout.col([
+    text_leaf(font, "Midnight City", 18.0, vh),
+    text_leaf(font, "M83 - Hurry Up, We are Dreaming", 12.0, vh),
+  ]) |> layout.with_align(layout.ALIGN_CENTER) |> layout.with_gap(4.0)
 
-  let bottom_bar = layout.row([
-    layout.leaf(40.0, 40.0), layout.leaf(40.0, 40.0),
-    layout.leaf(40.0, 40.0), layout.leaf(40.0, 40.0),
-  ]) |> layout.with_align(layout.ALIGN_CENTER) |> layout.with_justify(5)
-     |> layout.with_position(layout.POSITION_ABSOLUTE, AUTO, AUTO, 0.0, AUTO)
-     |> layout.with_width_pct(100.0) |> layout.with_size(AUTO, 64.0)
+  // ── Progress bar ──
+  //  idx 11: progress_row, idx 12: elapsed, idx 13: bar_bg, idx 14: bar_fill, idx 15: remaining
+  let bar_bg = layout.leaf(AUTO, 4.0) |> layout.with_grow(1.0)
+  let bar_fill = layout.leaf(AUTO, 4.0) |> layout.with_grow(0.4)
+  let progress = layout.col([
+    layout.row([bar_fill, bar_bg]) |> layout.with_gap(0.0),
+    layout.row([
+      text_leaf(font, "1:24", 10.0, vh),
+      text_leaf(font, "-2:51", 10.0, vh),
+    ]) |> layout.with_justify(layout.JUSTIFY_BETWEEN),
+  ]) |> layout.with_padding(layout.edges_xy(24.0, 0.0)) |> layout.with_gap(4.0)
 
-  let content = layout.col([header, mid1, mid2, bottom_bar])
-    |> layout.with_grow(1.0) |> layout.with_gap(10.0)
+  // ── Controls ──
+  let controls = layout.row([
+    layout.leaf(28.0, 28.0),  // shuffle
+    layout.leaf(36.0, 36.0),  // prev
+    layout.leaf(52.0, 52.0),  // play
+    layout.leaf(36.0, 36.0),  // next
+    layout.leaf(28.0, 28.0),  // repeat
+  ]) |> layout.with_justify(layout.JUSTIFY_EVENLY) |> layout.with_align(layout.ALIGN_CENTER)
+     |> layout.with_padding(layout.edges_xy(16.0, 0.0))
+
+  // ── Bottom nav ──
+  let nav = layout.row([
+    layout.leaf(24.0, 24.0), layout.leaf(24.0, 24.0), layout.leaf(24.0, 24.0),
+  ]) |> layout.with_justify(layout.JUSTIFY_EVENLY) |> layout.with_align(layout.ALIGN_CENTER)
+     |> layout.with_size(AUTO, 48.0)
+
+  // ── Assemble ──
+  let content = layout.col([status_bar, art_container, track_info, progress, controls, nav])
+    |> layout.with_grow(1.0) |> layout.with_gap(8.0)
 
   let phone = layout.col([content])
-    |> layout.with_size(phone_w, phone_h) |> layout.with_padding(layout.edges_all(10.0))
+    |> layout.with_size(phone_w, phone_h) |> layout.with_padding(layout.edges_all(0.0))
 
   let root = layout.row([phone])
     |> layout.with_justify(layout.JUSTIFY_CENTER) |> layout.with_align(layout.ALIGN_CENTER)
@@ -168,28 +199,20 @@ fn build_demo_layout(font: ttf.Font, vw: Float, vh: Float) -> { rects: List[layo
 
   let rects = layout.layout(root, vw, vh)
 
-  // Tree indices:
-  //  0  root
-  //  1    phone
-  //  2      content
-  //  3        header
-  //  4          title_text
-  //  5          sub_text
-  //  6        mid1
-  //  7          lbl1_text
-  //  8        mid2
-  //  9          lbl2_text
-  // 10        bottom_bar (abs)
-  // 11-14      icons
+  // Build text entries from known indices
+  // Flatten tree to find text node indices:
+  // 0=root, 1=phone, 2=content, 3=status_bar, 4=time, 5=signal,
+  // 6=art_container, 7=album_art, 8=track_info, 9=title, 10=artist,
+  // 11=progress_col, 12=bar_row, 13=bar_fill, 14=bar_bg, 15=time_row, 16=elapsed, 17=remaining,
+  // 18=controls, 19-23=buttons, 24=nav, 25-27=nav_items
 
-  let white = [1.0, 1.0, 1.0, 1.0]
-  let light = [0.9, 0.9, 0.9, 1.0]
-  let dark = [0.4, 0.4, 0.4, 1.0]
   let texts = [
-    { rect_idx: 4, chars: snaidhm.str("ceangal"), font_size: 24.0, color: dark, align: 1 },
-    { rect_idx: 5, chars: snaidhm.str("Yoga Layout Demo"), font_size: 11.0, color: dark, align: 1 },
-    { rect_idx: 7, chars: snaidhm.str("flex: 1"), font_size: 12.0, color: dark, align: 1 },
-    { rect_idx: 9, chars: snaidhm.str("flex: 2"), font_size: 12.0, color: dark, align: 1 },
+    { rect_idx: 4, chars: snaidhm.str("9:41"), font_size: 11.0, color: mid, align: 0 },
+    { rect_idx: 5, chars: snaidhm.str("100%"), font_size: 11.0, color: mid, align: 0 },
+    { rect_idx: 9, chars: snaidhm.str("Midnight City"), font_size: 18.0, color: white, align: 1 },
+    { rect_idx: 10, chars: snaidhm.str("M83 - Hurry Up, We are Dreaming"), font_size: 12.0, color: mid, align: 1 },
+    { rect_idx: 16, chars: snaidhm.str("1:24"), font_size: 10.0, color: mid, align: 0 },
+    { rect_idx: 17, chars: snaidhm.str("-2:51"), font_size: 10.0, color: mid, align: 0 },
   ]
 
   { rects: rects, texts: texts }
@@ -313,20 +336,29 @@ fn do_render(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int, img_
   var pid = 0
   let cr = px_to_ndc_w(6.0, vw)
 
-  // Shapes: phone frame + panels + icons (new indices with text nodes in tree)
+  // Music player rendered elements
+  // Tree: 0=root, 1=phone, 2=content, 3=status_bar, 4=time, 5=signal,
+  //   6=art_container, 7=album_art, 8=track_info, 9=title, 10=artist,
+  //   11=progress_col, 12=bar_row, 13=bar_fill, 14=bar_bg, 15=time_row, 16=elapsed, 17=remaining,
+  //   18=controls, 19=shuffle, 20=prev, 21=play, 22=next, 23=repeat,
+  //   24=nav, 25=nav0, 26=nav1, 27=nav2
   let shape_colors = [
-    [1.0, 1.0, 1.0, 1.0],         // phone frame
-    [0.82, 0.82, 0.82, 1.0],      // header (container)
-    [0.82, 0.82, 0.82, 1.0],      // middle1 (container)
-    [0.82, 0.82, 0.82, 1.0],      // middle2 (container)
-    [0.90, 0.90, 0.90, 1.0],      // bottom bar
-    [0.62, 0.62, 0.62, 1.0],      // icon0
-    [0.62, 0.62, 0.62, 1.0],      // icon1
-    [0.62, 0.62, 0.62, 1.0],      // icon2
-    [0.62, 0.62, 0.62, 1.0],      // icon3
+    [0.12, 0.12, 0.16, 1.0],      // phone bg
+    [0.55, 0.40, 0.70, 1.0],      // album art (visible purple)
+    [0.35, 0.6, 0.95, 1.0],       // bar fill (accent)
+    [0.25, 0.25, 0.30, 1.0],      // bar bg
+    [1.0, 1.0, 1.0, 1.0],         // play (white)
+    [0.6, 0.6, 0.65, 1.0],        // prev
+    [0.6, 0.6, 0.65, 1.0],        // next
+    [0.45, 0.45, 0.5, 1.0],       // shuffle
+    [0.45, 0.45, 0.5, 1.0],       // repeat
+    [0.35, 0.35, 0.4, 1.0],       // nav0
+    [0.6, 0.6, 0.95, 1.0],        // nav1 (active)
+    [0.35, 0.35, 0.4, 1.0],       // nav2
   ]
-  let render_indices = [1, 3, 6, 8, 10, 11, 12, 13, 14]
+  let render_indices = [1, 7, 13, 14, 21, 20, 22, 19, 23, 25, 26, 27]
 
+  // si=4 is play button (circle), si=1 is album art (larger corner radius)
   for si in 0..list.len(render_indices) {
     let ri = render_indices[si]
     let rect = rects[ri]
@@ -334,7 +366,12 @@ fn do_render(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int, img_
     let ny = px_to_ndc_y(rect.y + rect.h, vh)
     let nw = px_to_ndc_w(rect.w, vw)
     let nh = px_to_ndc_h(rect.h, vh)
-    cubics = cubics + snaidhm.round_rect_cubics(nx, ny, nw, nh, cr, dc, pid)
+    let node_cr = if si == 4 then float.min(nw, nh) / 2.0  // play = circle
+                  else if si == 1 then px_to_ndc_w(12.0, vw)  // album art = larger radius
+                  else if si >= 5 and si <= 8 then float.min(nw, nh) / 2.0  // control buttons = circles
+                  else if si >= 9 then px_to_ndc_w(4.0, vw)  // nav = small radius
+                  else cr
+    cubics = cubics + snaidhm.round_rect_cubics(nx, ny, nw, nh, node_cr, dc, pid)
     paints = paints + [snaidhm.solid(shape_colors[si][0], shape_colors[si][1], shape_colors[si][2], shape_colors[si][3])]
     pid = pid + 1
   }

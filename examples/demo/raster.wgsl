@@ -137,7 +137,7 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
     1.0 - f32(py) / f32(params.height) * 2.0,
   );
 
-  var color = vec3<f32>(0.42, 0.65, 0.60);  // teal background (Yoga sample)
+  var color = vec3<f32>(0.08, 0.08, 0.10);  // dark background
 
   // ── Shadows (SDF-based, before path fills) ──
   for (var si = 0u; si < params.shadow_count; si++) {
