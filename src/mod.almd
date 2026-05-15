@@ -88,6 +88,12 @@ fn do_prepare(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int,
 
   sc.reset_all()
   root_region = sc.create_region(data.content_w, data.content_h, vw, vh, 0 - 1)
+  // Inner scroll region: 60%×60% of viewport, centered
+  let inner_vp_w = vw * 0.6
+  let inner_vp_h = vh * 0.6
+  let inner_content_h = inner_vp_h * 3.0
+  let inner = sc.create_region(inner_vp_w, inner_content_h, inner_vp_w, inner_vp_h, root_region)
+  sc.set_bounds(inner, vw * 0.2, vh * 0.2, inner_vp_w, inner_vp_h)
   focused_region = root_region
 
   snaidhm.draw_frame(cached_scene, 0.0)
@@ -228,20 +234,37 @@ type SceneData = {
 
 fn build_test_scene(vw: Float, vh: Float) -> SceneData = {
   let dc = [0.5, 0.5, 0.5, 1.0]
-  let r = 0.01
-  let cubics =
+  let r = 0.02
+
+  // ── Outer: light top + dark bottom = 200vh ──
+  let outer =
     snaidhm.round_rect_cubics(-1.0, -1.0, 2.0, 2.0, r, dc, 0) +
-    snaidhm.round_rect_cubics(1.0,  -1.0, 2.0, 2.0, r, dc, 1) +
-    snaidhm.round_rect_cubics(-1.0, -3.0, 2.0, 2.0, r, dc, 2) +
-    snaidhm.round_rect_cubics(1.0,  -3.0, 2.0, 2.0, r, dc, 3)
+    snaidhm.round_rect_cubics(-1.0, -3.0, 2.0, 2.0, r, dc, 1)
+
+  // ── Inner: centered box, 60%w × 60%h of viewport ──
+  // 3 colored blocks inside, each = inner viewport height → total 300%
+  let ix = 0.0 - 0.6   // NDC x start (centered: -0.6 to 0.6 = 60%)
+  let iw = 1.2          // NDC width
+  let iy = 0.4          // NDC y top (centered: 0.4 to -0.8 = 60%)
+  let ih = 1.2          // NDC height per block (= inner viewport)
+
+  let inner =
+    snaidhm.round_rect_cubics(ix, iy - ih,       iw, ih, r, dc, 2) +
+    snaidhm.round_rect_cubics(ix, iy - ih * 2.0, iw, ih, r, dc, 3) +
+    snaidhm.round_rect_cubics(ix, iy - ih * 3.0, iw, ih, r, dc, 4)
+
   let paints = [
-    snaidhm.solid(0.9, 0.2, 0.2, 1.0),
-    snaidhm.solid(0.2, 0.8, 0.3, 1.0),
-    snaidhm.solid(0.2, 0.3, 0.9, 1.0),
-    snaidhm.solid(0.9, 0.8, 0.2, 1.0),
+    snaidhm.solid(0.92, 0.92, 0.95, 1.0),  // outer top: near-white
+    snaidhm.solid(0.35, 0.35, 0.40, 1.0),  // outer bottom: dark gray
+    snaidhm.solid(0.9, 0.25, 0.25, 1.0),   // inner 1: red
+    snaidhm.solid(0.2, 0.75, 0.3, 1.0),    // inner 2: green
+    snaidhm.solid(0.25, 0.35, 0.9, 1.0),   // inner 3: blue
   ]
   let shadows = [snaidhm.rect_shadow(99.0, 99.0, 0.01, 0.01, 0.0, 0.0, 0.0, 0.001, [0.0,0.0,0.0,0.0])]
-  { cubics: cubics, paints: paints, shadows: shadows, content_w: vw * 2.0, content_h: vh * 2.0 }
+
+  let inner_total = vh * 0.6 * 3.0
+  let total_h = float.max(vh * 2.0, vh * 0.2 + inner_total)
+  { cubics: outer + inner, paints: paints, shadows: shadows, content_w: vw, content_h: total_h }
 }
 
 // ── DOM (dormant) ──
