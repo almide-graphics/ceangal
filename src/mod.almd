@@ -13,7 +13,7 @@ import snaidhm.ttf as ttf
 
 var cached_scene: snaidhm.SceneHandle = {
   device: 0, width: 0, height: 0, viewport_tiles_x: 0, viewport_tiles_y: 0,
-  params_buf: 0, pixel_buf: 0,
+  params_buf: 0, regions_buf: 0, pixel_buf: 0,
   compute_pipeline: 0, compute_bg: 0,
   quad_pipeline: 0, quad_bg: 0,
   img_pipeline: 0, img_bg: 0,
@@ -34,6 +34,31 @@ fn draw_at_scroll() -> Unit = {
     let s = dpr()
     let ry = sc.ax(root_region, sc.AXIS_Y)
     let rx = sc.ax(root_region, sc.AXIS_X)
+
+    // Upload all region scroll data to GPU
+    // Build bounds/scroll lists scaled to physical pixels
+    var bx: List[Float] = list.repeat(0.0, 8)
+    var by: List[Float] = list.repeat(0.0, 8)
+    var bw: List[Float] = list.repeat(0.0, 8)
+    var bh: List[Float] = list.repeat(0.0, 8)
+    var sx: List[Float] = list.repeat(0.0, 8)
+    var sy: List[Float] = list.repeat(0.0, 8)
+    var cw: List[Float] = list.repeat(0.0, 8)
+    var ch: List[Float] = list.repeat(0.0, 8)
+    var pa: List[Int] = list.repeat(0 - 1, 8)
+    for i in 0..sc.region_count {
+      bx[i] = sc.rgn_bounds_x[i] * s
+      by[i] = sc.rgn_bounds_y[i] * s
+      bw[i] = sc.rgn_bounds_w[i] * s
+      bh[i] = sc.rgn_bounds_h[i] * s
+      sx[i] = sc.ax_pos[sc.ax(i, sc.AXIS_X)] * s
+      sy[i] = sc.ax_pos[sc.ax(i, sc.AXIS_Y)] * s
+      cw[i] = sc.rgn_content_w[i] * s
+      ch[i] = sc.rgn_content_h[i] * s
+      pa[i] = sc.rgn_parent[i]
+    }
+    snaidhm.upload_regions(cached_scene, sc.region_count, bx, by, bw, bh, sx, sy, cw, ch, pa)
+
     snaidhm.draw_frame_2d(cached_scene,
       sc.ax_pos[rx] * s, sc.ax_pos[ry] * s,
       sc.ax_bar_opacity[ry], sc.ax_bar_opacity[rx],

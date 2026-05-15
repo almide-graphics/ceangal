@@ -73,8 +73,14 @@ fn evaluate_paint(paint: Paint, p: vec2<f32>) -> vec4<f32> {
 @group(0) @binding(5) var<storage, read>       shadows: array<Shadow>;
 @group(0) @binding(6) var<storage, read>       paints: array<Paint>;
 @group(0) @binding(7) var<storage, read>       tile_cmds: array<u32>;
+@group(0) @binding(8) var<storage, read>       scroll_regions: array<vec4<f32>>;
+// Region layout in scroll_regions: 3 vec4s per region (48 bytes)
+//   [i*3+0] = bounds (x, y, w, h) in physical px
+//   [i*3+1] = (scroll_x, scroll_y, content_w, content_h)
+//   [i*3+2] = (parent_id_f, region_count_f, 0, 0)
 
 const MAX_CMDS_PER_TILE: u32 = 16u;
+const MAX_SCROLL_REGIONS: u32 = 8u;
 
 fn seg_area(p0: vec2<f32>, p1: vec2<f32>) -> f32 {
   let y = p0.y;
@@ -122,8 +128,26 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
   let max_cpx = f32(params.content_tiles_x * TILE_SIZE);
   let max_cpy = f32(params.content_tiles_y * TILE_SIZE);
 
+  // Root scroll (region 0) from Params
   var content_px = f32(px) - params.scroll_x;
   var content_py = f32(py) - params.scroll_y;
+
+  // Apply inner region scroll offsets (innermost match wins)
+  let region_count = u32(scroll_regions[2].y); // [0*3+2].y = count
+  for (var ri = 1u; ri < min(region_count, MAX_SCROLL_REGIONS); ri++) {
+    let bounds = scroll_regions[ri * 3u];
+    let scroll_info = scroll_regions[ri * 3u + 1u];
+    // bounds in root content space (physical px)
+    if content_px >= bounds.x && content_px < bounds.x + bounds.z &&
+       content_py >= bounds.y && content_py < bounds.y + bounds.w {
+      // Pixel is inside this inner region — apply additional scroll
+      let local_x = content_px - bounds.x;
+      let local_y = content_py - bounds.y;
+      // Remap to inner content space with inner scroll
+      content_px = bounds.x + local_x - scroll_info.x;
+      content_py = bounds.y + local_y - scroll_info.y;
+    }
+  }
 
   // ── Overscroll stretch (iOS rubber band visual) ──
   // Quadratic: f(t) = t*(1+sf) - t²*sf. f(0)=0, f(1)=1, f'(0)=1+sf (stretched at pull edge)
