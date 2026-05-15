@@ -14,8 +14,8 @@ import snaidhm.ttf as ttf
 var cached_scene: snaidhm.SceneHandle = {
   device: 0, width: 0, height: 0, viewport_tiles_x: 0, viewport_tiles_y: 0,
   params_buf: 0, regions_buf: 0, pixel_buf: 0,
-  compute_pipeline: 0, compute_bg: 0,
-  quad_pipeline: 0, quad_bg: 0,
+  compute_pipeline: 0, compute_bg: 0, compute_regions_bg: 0,
+  quad_pipeline: 0, quad_bg: 0, quad_regions_bg: 0,
   img_pipeline: 0, img_bg: 0,
   img_vtx: 0, img_idx: 0, img_count: 0, format: 0,
 }
@@ -57,7 +57,13 @@ fn draw_at_scroll() -> Unit = {
       ch[i] = sc.rgn_content_h[i] * s
       pa[i] = sc.rgn_parent[i]
     }
-    snaidhm.upload_regions(cached_scene, sc.region_count, bx, by, bw, bh, sx, sy, cw, ch, pa)
+    var boy: List[Float] = list.repeat(0.0, 8)
+    var box_: List[Float] = list.repeat(0.0, 8)
+    for i in 0..sc.region_count {
+      boy[i] = sc.ax_bar_opacity[sc.ax(i, sc.AXIS_Y)]
+      box_[i] = sc.ax_bar_opacity[sc.ax(i, sc.AXIS_X)]
+    }
+    snaidhm.upload_regions(cached_scene, sc.region_count, bx, by, bw, bh, sx, sy, cw, ch, pa, boy, box_)
 
     snaidhm.draw_frame_2d(cached_scene,
       sc.ax_pos[rx] * s, sc.ax_pos[ry] * s,
@@ -99,10 +105,26 @@ fn do_prepare(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int,
   snaidhm.draw_frame(cached_scene, 0.0)
 }
 
-// ── Scroll event exports ──
+// ── Unified hit test ──
+// Returns type * 256 + region_id
+// Types: 0=none, 1=region, 2=thumb_y, 3=thumb_x, 4=track_y, 5=track_x
 
-@export(wasm, "scroll_hit_test")
-fn scroll_hit_test(x: Float, y: Float) -> Int = sc.hit_test(x, y)
+@export(wasm, "hit_test")
+fn do_hit_test(x: Float, y: Float) -> Int = sc.full_hit_test(x, y)
+
+@export(wasm, "scrollbar_drag_to")
+fn do_scrollbar_drag_to(region: Int, axis: Int, screen_pos: Float) -> Unit = {
+  sc.scrollbar_drag_to(region, axis, screen_pos)
+  draw_at_scroll()
+}
+
+@export(wasm, "track_tap_at")
+fn do_track_tap_at(region: Int, axis: Int, screen_pos: Float) -> Unit = {
+  sc.track_tap_at(region, axis, screen_pos)
+  draw_at_scroll()
+}
+
+// ── Scroll event exports ──
 
 @export(wasm, "scroll_wheel")
 fn scroll_wheel(region: Int, dx: Float, dy: Float) -> Unit = {
@@ -126,7 +148,40 @@ fn scroll_tick(dt: Float) -> Int = {
   running
 }
 
-// ── Scrollbar exports (root region for now, generalize later) ──
+// ── Scrollbar exports (any region by ID) ──
+
+@export(wasm, "scrollbar_region_thumb_y")
+fn scrollbar_region_thumb_y(region: Int) -> Float = {
+  let t = sc.thumb_info(sc.ax(region, sc.AXIS_Y), sc.rgn_bounds_h[region], sc.rgn_content_h[region])
+  t.pos
+}
+
+@export(wasm, "scrollbar_region_height_y")
+fn scrollbar_region_height_y(region: Int) -> Float = {
+  let t = sc.thumb_info(sc.ax(region, sc.AXIS_Y), sc.rgn_bounds_h[region], sc.rgn_content_h[region])
+  t.size
+}
+
+@export(wasm, "scrollbar_region_set_frac_y")
+fn scrollbar_region_set_frac_y(region: Int, frac: Float) -> Unit = {
+  sc.set_scrollbar_frac(sc.ax(region, sc.AXIS_Y), frac, sc.rgn_content_h[region], sc.rgn_bounds_h[region])
+  draw_at_scroll()
+}
+
+@export(wasm, "region_count")
+fn get_region_count() -> Int = sc.region_count
+
+// Region bounds in CSS px (for JS hit test)
+@export(wasm, "region_screen_x")
+fn region_screen_x(region: Int) -> Float = sc.rgn_bounds_x[region] + sc.ax_pos[sc.ax(sc.rgn_parent[region], sc.AXIS_X)]
+@export(wasm, "region_screen_y")
+fn region_screen_y(region: Int) -> Float = sc.rgn_bounds_y[region] + sc.ax_pos[sc.ax(sc.rgn_parent[region], sc.AXIS_Y)]
+@export(wasm, "region_w")
+fn region_w(region: Int) -> Float = sc.rgn_bounds_w[region]
+@export(wasm, "region_h")
+fn region_h(region: Int) -> Float = sc.rgn_bounds_h[region]
+
+// ── Root scrollbar exports (convenience) ──
 
 @export(wasm, "scrollbar_info_y")
 fn scrollbar_info_y() -> Float = {

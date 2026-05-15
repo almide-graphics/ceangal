@@ -283,6 +283,145 @@ fn track_tap(i: Int, click_pos: Float, viewport: Float, content: Float) -> Unit 
   }
 }
 
+// ── Hit types ──
+
+let HIT_NONE = 0
+let HIT_REGION = 1
+let HIT_THUMB_Y = 2
+let HIT_THUMB_X = 3
+let HIT_TRACK_Y = 4
+let HIT_TRACK_X = 5
+
+let BAR_ZONE = 20.0  // CSS px hit zone width for scrollbar
+let BAR_WIDTH = 6.0
+let BAR_MARGIN = 3.0
+
+// ── Unified hit test ──
+// Returns packed result: type * 256 + region_id
+// Also stores thumb offset for drag start
+
+var hit_thumb_offset = 0.0  // distance from thumb top to click point
+
+fn full_hit_test(screen_x: Float, screen_y: Float) -> Int = {
+  // Walk regions innermost-first
+  var best_type = HIT_NONE
+  var best_region = 0
+
+  // Check inner regions first (reverse order)
+  for idx in 0..region_count {
+    let id = region_count - 1 - idx
+    // Region screen bounds
+    let rx = if rgn_parent[id] >= 0 then rgn_bounds_x[id] + ax_pos[ax(rgn_parent[id], AXIS_X)] else 0.0
+    let ry = if rgn_parent[id] >= 0 then rgn_bounds_y[id] + ax_pos[ax(rgn_parent[id], AXIS_Y)] else 0.0
+    let rw = rgn_bounds_w[id]
+    let rh = rgn_bounds_h[id]
+
+    // Vertical scrollbar check (right edge of region)
+    let bar_right = rx + rw
+    let bar_left = bar_right - BAR_ZONE
+    if screen_x >= bar_left and screen_x < bar_right and
+       screen_y >= ry and screen_y < ry + rh and
+       rgn_content_h[id] > rh then {
+      let ti = thumb_info(ax(id, AXIS_Y), rh, rgn_content_h[id])
+      let thumb_top = ry + ti.pos
+      let thumb_bottom = thumb_top + ti.size
+      if ti.size > 1.0 then {
+        if screen_y >= thumb_top and screen_y <= thumb_bottom then {
+          best_type = HIT_THUMB_Y
+          best_region = id
+          hit_thumb_offset = screen_y - thumb_top
+        } else {
+          best_type = HIT_TRACK_Y
+          best_region = id
+        }
+      } else ()
+    } else ()
+
+    // Horizontal scrollbar check (bottom edge of region)
+    if best_type == HIT_NONE then {
+      let bar_bottom = ry + rh
+      let bar_top = bar_bottom - BAR_ZONE
+      if screen_y >= bar_top and screen_y < bar_bottom and
+         screen_x >= rx and screen_x < rx + rw and
+         rgn_content_w[id] > rw then {
+        let ti = thumb_info(ax(id, AXIS_X), rw, rgn_content_w[id])
+        let thumb_left = rx + ti.pos
+        let thumb_right = thumb_left + ti.size
+        if ti.size > 1.0 then {
+          if screen_x >= thumb_left and screen_x <= thumb_right then {
+            best_type = HIT_THUMB_X
+            best_region = id
+            hit_thumb_offset = screen_x - thumb_left
+          } else {
+            best_type = HIT_TRACK_X
+            best_region = id
+          }
+        } else ()
+      } else ()
+    } else ()
+
+    // If we found a scrollbar hit, stop searching
+    if best_type != HIT_NONE and best_type != HIT_REGION then () else {
+      // Content area hit
+      if screen_x >= rx and screen_x < rx + rw and
+         screen_y >= ry and screen_y < ry + rh and
+         id > 0 then {
+        // Only set REGION for non-root (root is default)
+        if best_type == HIT_NONE then {
+          best_type = HIT_REGION
+          best_region = id
+        } else ()
+      } else ()
+    }
+  }
+
+  // Default: root region
+  if best_type == HIT_NONE then {
+    best_type = HIT_REGION
+    best_region = 0
+  } else ()
+
+  best_type * 256 + best_region
+}
+
+// Scrollbar drag: update scroll from screen thumb position
+fn scrollbar_drag_to(region: Int, axis: Int, screen_pos: Float) -> Unit = {
+  let ry = if rgn_parent[region] >= 0 then rgn_bounds_y[region] + ax_pos[ax(rgn_parent[region], AXIS_Y)] else 0.0
+  let rx = if rgn_parent[region] >= 0 then rgn_bounds_x[region] + ax_pos[ax(rgn_parent[region], AXIS_X)] else 0.0
+  if axis == AXIS_Y then {
+    let vp = rgn_bounds_h[region]
+    let content = rgn_content_h[region]
+    let ti = thumb_info(ax(region, AXIS_Y), vp, content)
+    let track = vp - ti.size
+    if track > 0.0 then {
+      let thumb_top = screen_pos - hit_thumb_offset - ry
+      let frac = float.max(0.0, float.min(1.0, thumb_top / track))
+      set_scrollbar_frac(ax(region, AXIS_Y), frac, content, vp)
+    } else ()
+  } else {
+    let vp = rgn_bounds_w[region]
+    let content = rgn_content_w[region]
+    let ti = thumb_info(ax(region, AXIS_X), vp, content)
+    let track = vp - ti.size
+    if track > 0.0 then {
+      let thumb_left = screen_pos - hit_thumb_offset - rx
+      let frac = float.max(0.0, float.min(1.0, thumb_left / track))
+      set_scrollbar_frac(ax(region, AXIS_X), frac, content, vp)
+    } else ()
+  }
+}
+
+// Track tap: jump to click position in a region
+fn track_tap_at(region: Int, axis: Int, screen_pos: Float) -> Unit = {
+  if axis == AXIS_Y then {
+    let ry = if rgn_parent[region] >= 0 then rgn_bounds_y[region] + ax_pos[ax(rgn_parent[region], AXIS_Y)] else 0.0
+    track_tap(ax(region, AXIS_Y), screen_pos - ry, rgn_bounds_h[region], rgn_content_h[region])
+  } else {
+    let rx = if rgn_parent[region] >= 0 then rgn_bounds_x[region] + ax_pos[ax(rgn_parent[region], AXIS_X)] else 0.0
+    track_tap(ax(region, AXIS_X), screen_pos - rx, rgn_bounds_w[region], rgn_content_w[region])
+  }
+}
+
 // ── Accessors (for testing + external use) ──
 
 fn get_pos(region: Int, axis: Int) -> Float = ax_pos[ax(region, axis)]

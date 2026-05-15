@@ -272,7 +272,8 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
     const scale = e.deltaMode === 1 ? 20 : 1;
     const rect = canvas.getBoundingClientRect();
     const mx = e.clientX - rect.left, my = e.clientY - rect.top;
-    if (ex.scroll_hit_test) _activeRegion = N(ex.scroll_hit_test(mx, my));
+    const hit = doHitTest(mx, my);
+    _activeRegion = hit.region;
     const dy = -e.deltaY * scale;
     const dx = (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY))
       ? -((Math.abs(e.deltaX) > Math.abs(e.deltaY)) ? e.deltaX : e.deltaY) * scale : 0;
@@ -322,92 +323,68 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   });
   canvas.addEventListener("pointercancel", () => { _dragging = false; });
 
-  // ── Scrollbar: hover, drag, track tap ──
+  // ── Unified hit test + interaction (all logic in WASM) ──
 
-  let _barAxis = null; // "y" | "x" | null
-  let _barStart = 0, _barThumbStart = 0;
-  const BAR_ZONE = 24; // hit zone width in CSS px
+  const HIT_NONE = 0, HIT_REGION = 1, HIT_THUMB_Y = 2, HIT_THUMB_X = 3, HIT_TRACK_Y = 4, HIT_TRACK_X = 5;
+  let _interaction = null; // { type, region, axis }
 
-  function barGeom() {
-    return {
-      yTop: ex.scrollbar_info_y ? Number(ex.scrollbar_info_y()) : 0,
-      yH: ex.scrollbar_height_y ? Number(ex.scrollbar_height_y()) : 0,
-      xLeft: ex.scrollbar_info_x ? Number(ex.scrollbar_info_x()) : 0,
-      xW: ex.scrollbar_width_x ? Number(ex.scrollbar_width_x()) : 0,
-    };
+  function doHitTest(mx, my) {
+    if (!ex.do_hit_test) return { type: HIT_REGION, region: 0 };
+    const packed = N(ex.do_hit_test(mx, my));
+    return { type: (packed >> 8) & 0xFF, region: packed & 0xFF };
   }
 
-  // Hover detection
+  // Hover
   canvas.addEventListener("mousemove", (e) => {
-    if (_barAxis) return; // dragging, skip hover
+    if (_interaction) return;
     const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
-    const cw = container.clientWidth, ch = container.clientHeight;
-    const nearRight = mx > cw - BAR_ZONE;
-    const nearBottom = my > ch - BAR_ZONE;
-    ex.scrollbar_set_hover_y?.(nearRight ? 1.0 : 0.0);
-    ex.scrollbar_set_hover_x?.(nearBottom ? 1.0 : 0.0);
+    const hit = doHitTest(e.clientX - rect.left, e.clientY - rect.top);
+    const nearBar = hit.type >= HIT_THUMB_Y;
+    ex.scrollbar_set_hover_y?.(nearBar && (hit.type === HIT_THUMB_Y || hit.type === HIT_TRACK_Y) ? 1.0 : 0.0);
+    ex.scrollbar_set_hover_x?.(nearBar && (hit.type === HIT_THUMB_X || hit.type === HIT_TRACK_X) ? 1.0 : 0.0);
     animator.kick();
   });
 
   canvas.addEventListener("mouseleave", () => {
-    if (!_barAxis) {
+    if (!_interaction) {
       ex.scrollbar_set_hover_y?.(0.0);
       ex.scrollbar_set_hover_x?.(0.0);
       animator.kick();
     }
   });
 
-  // Scrollbar mousedown: thumb drag or track tap
+  // Mousedown: dispatch based on hit type
   canvas.addEventListener("mousedown", (e) => {
     if (e.button !== 0) return;
     const rect = canvas.getBoundingClientRect();
     const mx = e.clientX - rect.left, my = e.clientY - rect.top;
-    const cw = container.clientWidth, ch = container.clientHeight;
-    const g = barGeom();
+    const hit = doHitTest(mx, my);
 
-    // Vertical scrollbar zone
-    if (mx > cw - BAR_ZONE && g.yH > 1) {
-      if (my >= g.yTop && my <= g.yTop + g.yH) {
-        // Thumb drag
-        _barAxis = "y"; _barStart = my; _barThumbStart = g.yTop;
-      } else {
-        // Track tap — jump to click position
-        ex.scrollbar_track_tap_y?.(my);
-        animator.kick();
-      }
-      e.preventDefault(); return;
-    }
-    // Horizontal scrollbar zone
-    if (my > ch - BAR_ZONE && g.xW > 1) {
-      if (mx >= g.xLeft && mx <= g.xLeft + g.xW) {
-        _barAxis = "x"; _barStart = mx; _barThumbStart = g.xLeft;
-      } else {
-        ex.scrollbar_track_tap_x?.(mx);
-        animator.kick();
-      }
-      e.preventDefault(); return;
+    if (hit.type === HIT_THUMB_Y) {
+      _interaction = { type: hit.type, region: hit.region, axis: 0 };
+      e.preventDefault();
+    } else if (hit.type === HIT_THUMB_X) {
+      _interaction = { type: hit.type, region: hit.region, axis: 1 };
+      e.preventDefault();
+    } else if (hit.type === HIT_TRACK_Y) {
+      ex.do_track_tap_at?.(B(hit.region), B(0), my);
+      animator.kick(); e.preventDefault();
+    } else if (hit.type === HIT_TRACK_X) {
+      ex.do_track_tap_at?.(B(hit.region), B(1), mx);
+      animator.kick(); e.preventDefault();
     }
   });
 
+  // Mousemove: scrollbar drag
   window.addEventListener("mousemove", (e) => {
-    if (!_barAxis) return;
+    if (!_interaction) return;
     const rect = canvas.getBoundingClientRect();
-    if (_barAxis === "y") {
-      const my = e.clientY - rect.top;
-      const thumbH = Number(ex.scrollbar_height_y());
-      const track = container.clientHeight - thumbH;
-      if (track > 0) ex.scrollbar_set_frac_y?.(Math.max(0, Math.min(1, (_barThumbStart + my - _barStart) / track)));
-    } else {
-      const mx = e.clientX - rect.left;
-      const thumbW = Number(ex.scrollbar_width_x());
-      const track = container.clientWidth - thumbW;
-      if (track > 0) ex.scrollbar_set_frac_x?.(Math.max(0, Math.min(1, (_barThumbStart + mx - _barStart) / track)));
-    }
+    const pos = _interaction.axis === 0 ? e.clientY - rect.top : e.clientX - rect.left;
+    ex.do_scrollbar_drag_to?.(B(_interaction.region), B(_interaction.axis), pos);
     animator.kick();
   });
 
-  window.addEventListener("mouseup", () => { _barAxis = null; });
+  window.addEventListener("mouseup", () => { _interaction = null; });
 
   // ── Keyboard scroll ──
   canvas.tabIndex = 0;

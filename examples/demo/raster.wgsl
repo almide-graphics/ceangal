@@ -73,7 +73,7 @@ fn evaluate_paint(paint: Paint, p: vec2<f32>) -> vec4<f32> {
 @group(0) @binding(5) var<storage, read>       shadows: array<Shadow>;
 @group(0) @binding(6) var<storage, read>       paints: array<Paint>;
 @group(0) @binding(7) var<storage, read>       tile_cmds: array<u32>;
-@group(0) @binding(8) var<storage, read>       scroll_regions: array<vec4<f32>>;
+@group(1) @binding(0) var<storage, read>       scroll_regions: array<vec4<f32>>;
 // Region layout in scroll_regions: 3 vec4s per region (48 bytes)
 //   [i*3+0] = bounds (x, y, w, h) in physical px
 //   [i*3+1] = (scroll_x, scroll_y, content_w, content_h)
@@ -133,19 +133,25 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
   var content_py = f32(py) - params.scroll_y;
 
   // Apply inner region scroll offsets (innermost match wins)
+  // scroll_info: (scroll_x, scroll_y, content_w, content_h)
   let region_count = u32(scroll_regions[2].y); // [0*3+2].y = count
   for (var ri = 1u; ri < min(region_count, MAX_SCROLL_REGIONS); ri++) {
     let bounds = scroll_regions[ri * 3u];
     let scroll_info = scroll_regions[ri * 3u + 1u];
-    // bounds in root content space (physical px)
     if content_px >= bounds.x && content_px < bounds.x + bounds.z &&
        content_py >= bounds.y && content_py < bounds.y + bounds.w {
-      // Pixel is inside this inner region — apply additional scroll
       let local_x = content_px - bounds.x;
       let local_y = content_py - bounds.y;
-      // Remap to inner content space with inner scroll
-      content_px = bounds.x + local_x - scroll_info.x;
-      content_py = bounds.y + local_y - scroll_info.y;
+      // Inner content position (with scroll offset)
+      let inner_cx = local_x - scroll_info.x;
+      let inner_cy = local_y - scroll_info.y;
+      // Clip: only apply if within inner content bounds
+      if inner_cx >= 0.0 && inner_cx < scroll_info.z &&
+         inner_cy >= 0.0 && inner_cy < scroll_info.w {
+        content_px = bounds.x + inner_cx;
+        content_py = bounds.y + inner_cy;
+      }
+      // else: pixel outside inner content → show outer content (no change)
     }
   }
 
@@ -322,6 +328,44 @@ fn fs_fullscreen(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
     r = mix(r, 1.0, a_x);
     g = mix(g, 1.0, a_x);
     b = mix(b, 1.0, a_x);
+  }
+
+  // ── Inner region scrollbars ──
+  // [i*3+0]=bounds, [i*3+1]=(scroll_x, scroll_y, content_w, content_h)
+  // [i*3+2]=(parent_id, region_count, bar_opacity_y, bar_opacity_x)
+  let rgn_count = u32(scroll_regions[2].y);
+  for (var ri = 1u; ri < min(rgn_count, MAX_SCROLL_REGIONS); ri++) {
+    let rgn_bounds = scroll_regions[ri * 3u];
+    let rgn_scroll = scroll_regions[ri * 3u + 1u];
+    let rgn_meta = scroll_regions[ri * 3u + 2u];
+    let rgn_bar_oy = rgn_meta.z;
+    let rgn_vp_w = rgn_bounds.z;
+    let rgn_vp_h = rgn_bounds.w;
+    let rgn_content_h = rgn_scroll.w;
+
+    let screen_x = rgn_bounds.x + render_params.scroll_x;
+    let screen_y = rgn_bounds.y + render_params.scroll_y;
+
+    // Vertical scrollbar (with fade)
+    if rgn_content_h > rgn_vp_h && rgn_bar_oy > 0.01 {
+      let inner_range = rgn_content_h - rgn_vp_h;
+      let inner_frac = clamp(-rgn_scroll.y / inner_range, 0.0, 1.0);
+      let bar_w = 5.0;
+      let margin_r = 2.0;
+      let thumb_h = max(24.0, rgn_vp_h * rgn_vp_h / rgn_content_h);
+      let thumb_y = screen_y + inner_frac * (rgn_vp_h - thumb_h);
+      let bar_x = screen_x + rgn_vp_w - margin_r - bar_w;
+
+      if bar_x > 0.0 && bar_x < w && thumb_y < h && thumb_y + thumb_h > 0.0 {
+        let center_v = vec2<f32>(bar_x + bar_w * 0.5, thumb_y + thumb_h * 0.5);
+        let half_v = vec2<f32>(bar_w * 0.5, thumb_h * 0.5);
+        let d_v = scrollbar_sdf(vec2<f32>(px_x, px_y), center_v, half_v, bar_w * 0.5);
+        let a_v = (1.0 - smoothstep(-1.0, 0.5, d_v)) * 0.55 * rgn_bar_oy;
+        r = mix(r, 1.0, a_v);
+        g = mix(g, 1.0, a_v);
+        b = mix(b, 1.0, a_v);
+      }
+    }
   }
 
   return vec4<f32>(r, g, b, 1.0);
