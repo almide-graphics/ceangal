@@ -302,17 +302,33 @@ let BAR_MARGIN = 3.0
 
 var hit_thumb_offset = 0.0  // distance from thumb top to click point
 
+// Recursively compute screen position of a region (walks parent chain)
+// Recursively compute screen position of a region (walks full parent chain)
+// Root region (parent < 0) is at screen (0,0); its scroll offset is applied by children.
+fn region_screen_pos_x(id: Int) -> Float = {
+  if id < 0 or rgn_parent[id] < 0 then 0.0
+  else {
+    let p = rgn_parent[id]
+    rgn_bounds_x[id] + ax_pos[ax(p, AXIS_X)] + region_screen_pos_x(p)
+  }
+}
+
+fn region_screen_pos_y(id: Int) -> Float = {
+  if id < 0 or rgn_parent[id] < 0 then 0.0
+  else {
+    let p = rgn_parent[id]
+    rgn_bounds_y[id] + ax_pos[ax(p, AXIS_Y)] + region_screen_pos_y(p)
+  }
+}
+
 fn full_hit_test(screen_x: Float, screen_y: Float) -> Int = {
-  // Walk regions innermost-first
   var best_type = HIT_NONE
   var best_region = 0
 
-  // Check inner regions first (reverse order)
   for idx in 0..region_count {
     let id = region_count - 1 - idx
-    // Region screen bounds
-    let rx = if rgn_parent[id] >= 0 then rgn_bounds_x[id] + ax_pos[ax(rgn_parent[id], AXIS_X)] else 0.0
-    let ry = if rgn_parent[id] >= 0 then rgn_bounds_y[id] + ax_pos[ax(rgn_parent[id], AXIS_Y)] else 0.0
+    let rx = region_screen_pos_x(id)
+    let ry = region_screen_pos_y(id)
     let rw = rgn_bounds_w[id]
     let rh = rgn_bounds_h[id]
 
@@ -386,8 +402,8 @@ fn full_hit_test(screen_x: Float, screen_y: Float) -> Int = {
 
 // Scrollbar drag: update scroll from screen thumb position
 fn scrollbar_drag_to(region: Int, axis: Int, screen_pos: Float) -> Unit = {
-  let ry = if rgn_parent[region] >= 0 then rgn_bounds_y[region] + ax_pos[ax(rgn_parent[region], AXIS_Y)] else 0.0
-  let rx = if rgn_parent[region] >= 0 then rgn_bounds_x[region] + ax_pos[ax(rgn_parent[region], AXIS_X)] else 0.0
+  let ry = region_screen_pos_y(region)
+  let rx = region_screen_pos_x(region)
   if axis == AXIS_Y then {
     let vp = rgn_bounds_h[region]
     let content = rgn_content_h[region]
@@ -411,14 +427,11 @@ fn scrollbar_drag_to(region: Int, axis: Int, screen_pos: Float) -> Unit = {
   }
 }
 
-// Track tap: jump to click position in a region
 fn track_tap_at(region: Int, axis: Int, screen_pos: Float) -> Unit = {
   if axis == AXIS_Y then {
-    let ry = if rgn_parent[region] >= 0 then rgn_bounds_y[region] + ax_pos[ax(rgn_parent[region], AXIS_Y)] else 0.0
-    track_tap(ax(region, AXIS_Y), screen_pos - ry, rgn_bounds_h[region], rgn_content_h[region])
+    track_tap(ax(region, AXIS_Y), screen_pos - region_screen_pos_y(region), rgn_bounds_h[region], rgn_content_h[region])
   } else {
-    let rx = if rgn_parent[region] >= 0 then rgn_bounds_x[region] + ax_pos[ax(rgn_parent[region], AXIS_X)] else 0.0
-    track_tap(ax(region, AXIS_X), screen_pos - rx, rgn_bounds_w[region], rgn_content_w[region])
+    track_tap(ax(region, AXIS_X), screen_pos - region_screen_pos_x(region), rgn_bounds_w[region], rgn_content_w[region])
   }
 }
 

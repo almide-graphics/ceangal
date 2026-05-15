@@ -190,6 +190,84 @@ test "wheel coast stop cycle" {
   assert(float.abs(s.get_vel(0, 0)) < 0.5)
 }
 
+// ── hit test ──
+
+test "hit_test returns inner region for point inside" {
+  s.reset_all()
+  let root = s.create_region(1000.0, 2000.0, 500.0, 500.0, 0 - 1)
+  let inner = s.create_region(300.0, 900.0, 300.0, 300.0, root)
+  s.set_bounds(inner, 100.0, 100.0, 300.0, 300.0)
+  // Point inside inner (250, 250)
+  let packed = s.full_hit_test(250.0, 250.0)
+  let hit_type = packed / 256
+  let hit_region = packed - hit_type * 256
+  assert(hit_type == 1) // HIT_REGION
+  assert(hit_region == inner)
+}
+
+test "hit_test returns root for point outside inner" {
+  s.reset_all()
+  let root = s.create_region(1000.0, 2000.0, 500.0, 500.0, 0 - 1)
+  let inner = s.create_region(300.0, 900.0, 300.0, 300.0, root)
+  s.set_bounds(inner, 100.0, 100.0, 300.0, 300.0)
+  // Point outside inner (50, 50)
+  let packed = s.full_hit_test(50.0, 50.0)
+  let hit_type = packed / 256
+  let hit_region = packed - hit_type * 256
+  assert(hit_type == 1) // HIT_REGION
+  assert(hit_region == root)
+}
+
+test "hit_test finds scrollbar thumb" {
+  s.reset_all()
+  let root = s.create_region(500.0, 2000.0, 500.0, 500.0, 0 - 1)
+  // Scrollbar is at right edge: x=500-20..500, thumb at top when scroll=0
+  let packed = s.full_hit_test(495.0, 10.0)
+  let hit_type = packed / 256
+  assert(hit_type == 2) // HIT_THUMB_Y
+}
+
+test "hit_test finds scrollbar track" {
+  s.reset_all()
+  let root = s.create_region(500.0, 2000.0, 500.0, 500.0, 0 - 1)
+  // Thumb is at top (small). Click far below thumb → track
+  let packed = s.full_hit_test(495.0, 450.0)
+  let hit_type = packed / 256
+  assert(hit_type == 4) // HIT_TRACK_Y
+}
+
+test "hit_test with scrolled parent" {
+  s.reset_all()
+  let root = s.create_region(500.0, 2000.0, 500.0, 500.0, 0 - 1)
+  let inner = s.create_region(300.0, 900.0, 300.0, 300.0, root)
+  s.set_bounds(inner, 100.0, 100.0, 300.0, 300.0)
+  // Scroll root down by 50px
+  s.set_pos(root, s.AXIS_Y, -50.0)
+  // Inner region screen pos: (100, 100 + (-50)) = (100, 50)
+  // Point at (250, 200) → inside inner (100..400, 50..350)
+  let packed = s.full_hit_test(250.0, 200.0)
+  let hit_region = packed - (packed / 256) * 256
+  assert(hit_region == inner)
+}
+
+test "region_screen_pos with nested parents" {
+  s.reset_all()
+  let root = s.create_region(1000.0, 3000.0, 1000.0, 1000.0, 0 - 1)
+  let mid = s.create_region(600.0, 1800.0, 600.0, 600.0, root)
+  s.set_bounds(mid, 100.0, 100.0, 600.0, 600.0)
+  let deep = s.create_region(200.0, 600.0, 200.0, 200.0, mid)
+  s.set_bounds(deep, 50.0, 50.0, 200.0, 200.0)
+  // Scroll root by -100, mid by -30
+  s.set_pos(root, s.AXIS_Y, -100.0)
+  s.set_pos(mid, s.AXIS_Y, -30.0)
+  // deep screen_y = bounds_y[deep] + mid_scroll_y + region_screen_pos_y(mid)
+  //               = 50 + (-30) + (bounds_y[mid] + root_scroll_y + region_screen_pos_y(root))
+  //               = 50 - 30 + (100 + (-100) + 0)
+  //               = 50 - 30 + 0 = 20
+  let sy = s.region_screen_pos_y(deep)
+  assert(approx(sy, 20.0, 1.0))
+}
+
 // ── powf ──
 
 test "powf computes float exponentiation" {
