@@ -357,6 +357,19 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
 
   window.addEventListener("mouseup", () => { _barAxis = null; });
 
+  // ── Keyboard scroll ──
+  canvas.tabIndex = 0;
+  canvas.focus();
+  const keyMap = { ArrowUp: 0, ArrowDown: 1, ArrowLeft: 2, ArrowRight: 3, PageUp: 4, PageDown: 5, Home: 6, End: 7 };
+  canvas.addEventListener("keydown", (e) => {
+    const code = keyMap[e.key];
+    if (code !== undefined && ex.scroll_key) {
+      e.preventDefault();
+      ex.scroll_key(B(code));
+      animator.kick();
+    }
+  });
+
   // ── Resize + visibility ──
 
   let _resizeTimer;

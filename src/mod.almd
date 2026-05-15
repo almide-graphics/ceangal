@@ -130,6 +130,24 @@ fn scrollbar_set_frac_x(frac: Float) -> Unit = {
   draw_at_scroll()
 }
 
+// ── Keyboard scroll ──
+// key codes: 0=up, 1=down, 2=left, 3=right, 4=pageup, 5=pagedown, 6=home, 7=end
+
+@export(wasm, "scroll_key")
+fn scroll_key(key: Int) -> Unit = {
+  let line = 40.0
+  let page = viewport_h * 0.85
+  if key == 0 then { scroll.wheel_y(line); draw_at_scroll() }
+  else if key == 1 then { scroll.wheel_y(0.0 - line); draw_at_scroll() }
+  else if key == 2 then { scroll.wheel_x(line); draw_at_scroll() }
+  else if key == 3 then { scroll.wheel_x(0.0 - line); draw_at_scroll() }
+  else if key == 4 then { scroll.wheel_y(page); draw_at_scroll() }
+  else if key == 5 then { scroll.wheel_y(0.0 - page); draw_at_scroll() }
+  else if key == 6 then { scroll.scrollbar_set_y(0.0, content_h, viewport_h); draw_at_scroll() }
+  else if key == 7 then { scroll.scrollbar_set_y(1.0, content_h, viewport_h); draw_at_scroll() }
+  else ()
+}
+
 // ── Legacy compat ──
 
 @export(wasm, "render_scene")

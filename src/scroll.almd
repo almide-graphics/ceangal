@@ -5,9 +5,22 @@
 
 import math
 
+// Float pow via exp/log (math.pow is Int-only)
+fn powf(base: Float, exp: Float) -> Float = math.exp(exp * math.log(base))
+
 let IDLE = 0
 let COASTING = 1
 let BOUNCING = 2
+
+// ── Physics parameters ──
+let FRICTION = 0.035
+let BOUNCE_STIFFNESS = 120.0
+let BOUNCE_DAMPING = 22.0
+let MAX_OVERSCROLL = 100.0
+let VELOCITY_THRESHOLD = 0.3
+let VELOCITY_CAP = 6000.0
+let WHEEL_SCALE = 2.0
+let BOUNCE_VEL_RETAIN = 0.12
 
 // ── Vertical state ──
 var pos_y = 0.0
@@ -44,27 +57,26 @@ fn tick_axis(pos: Float, vel: Float, min_bound: Float, st: Int, dt: Float) -> { 
   var v = vel
   var s = st
   if s == COASTING then {
-    let base = 0.95
-    var decay = base * base * base
-    if dt * 60.0 < 1.5 then { decay = base } else ()
-    if dt * 60.0 > 2.5 then { decay = base * base * base * base } else ()
+    // Exponential friction: v *= (1 - FRICTION)^(dt * 60)
+    let decay = powf(1.0 - FRICTION, dt * 60.0)
     v = v * decay
     p = p + v * dt
     let over = p > 0.5 or p < min_bound - 0.5
     if over then {
       s = BOUNCING
-      v = v * 0.15
-    } else if float.abs(v) < 0.5 then {
+      v = v * BOUNCE_VEL_RETAIN
+    } else if float.abs(v) < VELOCITY_THRESHOLD then {
       s = IDLE
     } else ()
   } else if s == BOUNCING then {
+    // Critically damped spring
     let target = if p < min_bound then min_bound else 0.0
     let disp = p - target
-    let force = 0.0 - 100.0 * disp - 20.0 * v
+    let force = 0.0 - BOUNCE_STIFFNESS * disp - BOUNCE_DAMPING * v
     v = v + force * dt
     p = p + v * dt
-    p = float.max(min_bound - 120.0, float.min(120.0, p))
-    if float.abs(disp) < 0.5 and float.abs(v) < 0.5 then {
+    p = float.max(min_bound - MAX_OVERSCROLL, float.min(MAX_OVERSCROLL, p))
+    if float.abs(disp) < 0.3 and float.abs(v) < 0.3 then {
       p = target
       v = 0.0
       s = IDLE
@@ -76,7 +88,7 @@ fn tick_axis(pos: Float, vel: Float, min_bound: Float, st: Int, dt: Float) -> { 
 // ── Wheel ──
 
 fn wheel_y(dy: Float) -> Unit = {
-  vel_y = dy * 2.0
+  vel_y = dy * WHEEL_SCALE
   pos_y = pos_y + dy
   state_y = if is_over_y() then BOUNCING else COASTING
   bar_opacity_y = 1.0
@@ -84,7 +96,7 @@ fn wheel_y(dy: Float) -> Unit = {
 }
 
 fn wheel_x(dx: Float) -> Unit = {
-  vel_x = dx * 2.0
+  vel_x = dx * WHEEL_SCALE
   pos_x = pos_x + dx
   state_x = if is_over_x() then BOUNCING else COASTING
   bar_opacity_x = 1.0
@@ -93,19 +105,30 @@ fn wheel_x(dx: Float) -> Unit = {
 
 // ── Drag ──
 
+// iOS-style rubber band: diminishing returns as overscroll increases
+fn rubber_band(delta: Float, over: Float) -> Float = {
+  if over <= 0.0 then delta
+  else {
+    // d * (1 - log(1 + over/dim) / log_max)  where dim=MAX_OVERSCROLL
+    let ratio = over / MAX_OVERSCROLL
+    let resist = 1.0 / (1.0 + ratio * 2.5)
+    delta * resist
+  }
+}
+
 fn drag_y(dy: Float) -> Unit = {
   let over = if pos_y > 0.0 then pos_y
              else if pos_y < min_y then min_y - pos_y
              else 0.0
-  let resist = if over > 0.0 then 1.0 / (1.0 + over / 120.0) else 1.0
-  pos_y = pos_y + dy * resist
+  pos_y = pos_y + rubber_band(dy, over)
   state_y = IDLE
   bar_opacity_y = 1.0
   bar_idle_y = 0.0
 }
 
 fn release_y(vel: Float) -> Unit = {
-  let capped = if float.abs(vel) > 8000.0 then 8000.0 * (if vel > 0.0 then 1.0 else 0.0 - 1.0) else vel
+  let sign = if vel > 0.0 then 1.0 else 0.0 - 1.0
+  let capped = if float.abs(vel) > VELOCITY_CAP then VELOCITY_CAP * sign else vel
   vel_y = capped
   state_y = if float.abs(capped) > 0.5 then COASTING
             else if is_over_y() then BOUNCING
