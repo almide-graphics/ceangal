@@ -1,7 +1,7 @@
 // snaidhm Phase 1 — Tiled path renderer (content-space 2D scroll + scrollbar)
 
 const TILE_SIZE: u32 = 16u;
-const MAX_SEGS_PER_TILE: u32 = 64u;
+const MAX_SEGS_PER_TILE: u32 = 16u;
 
 struct LineSeg {
   p0: vec2<f32>,
@@ -28,8 +28,8 @@ struct Params {
   _pad0: u32,
   scrollbar_hover_y: f32,
   scrollbar_hover_x: f32,
-  _pad1: u32,
-  _pad2: u32,
+  vlist_item_h: f32,      // virtual list: item height in physical px (0 = disabled)
+  vlist_item_count: f32,  // virtual list: total item count (as float)
 }
 
 struct Shadow {
@@ -79,7 +79,7 @@ fn evaluate_paint(paint: Paint, p: vec2<f32>) -> vec4<f32> {
 //   [i*3+1] = (scroll_x, scroll_y, content_w, content_h)
 //   [i*3+2] = (parent_id_f, region_count_f, 0, 0)
 
-const MAX_CMDS_PER_TILE: u32 = 16u;
+const MAX_CMDS_PER_TILE: u32 = 8u;
 const MAX_SCROLL_REGIONS: u32 = 8u;
 
 fn seg_area(p0: vec2<f32>, p1: vec2<f32>) -> f32 {
@@ -155,9 +155,9 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
     }
   }
 
-  // ── Overscroll stretch (iOS rubber band visual) ──
-  // Quadratic: f(t) = t*(1+sf) - t²*sf. f(0)=0, f(1)=1, f'(0)=1+sf (stretched at pull edge)
+  // ── Overscroll stretch (iOS rubber band visual, skip for virtual list) ──
   let smin_y = -(max_cpy - h);
+  if params.vlist_item_h < 0.5 {  // only for non-vlist content
   let ov_top = max(params.scroll_y, 0.0);
   let ov_bot = max(-(params.scroll_y - smin_y), 0.0);
   if ov_top > 0.5 {
@@ -181,8 +181,62 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
     let t = (w - f32(px)) / w;
     content_px = max_cpx - (t * (1.0 + sf) - t * t * sf) * w;
   }
+  } // end vlist_item_h < 0.5 (overscroll stretch)
 
-  if content_px < 0.0 || content_px >= max_cpx || content_py < 0.0 || content_py >= max_cpy {
+  if content_px < 0.0 || content_py < 0.0 {
+    pixels[py * params.width + px] = pack_color(0.08, 0.08, 0.10, 1.0);
+    return;
+  }
+
+  // ── Virtual list fast path: O(1) per pixel, no tiling needed ──
+  if params.vlist_item_h > 0.5 {
+    let total_h = params.vlist_item_h * params.vlist_item_count;
+    if content_py >= total_h {
+      pixels[py * params.width + px] = pack_color(0.08, 0.08, 0.10, 1.0);
+      return;
+    }
+    let item_idx = u32(content_py / params.vlist_item_h);
+    let item_top = f32(item_idx) * params.vlist_item_h;
+    let item_local_y = content_py - item_top;
+    let gap = 3.0;
+    let margin_x = f32(params.width) * 0.03;
+    let corner_r = 8.0;
+
+    // Gap between items
+    if item_local_y < gap || content_px < margin_x || content_px > f32(params.width) - margin_x {
+      pixels[py * params.width + px] = pack_color(0.08, 0.08, 0.10, 1.0);
+      return;
+    }
+
+    // Rounded corners via SDF
+    let rect_h = params.vlist_item_h - gap;
+    let rect_w = f32(params.width) - margin_x * 2.0;
+    let local = vec2<f32>(content_px - margin_x - rect_w * 0.5, item_local_y - gap - rect_h * 0.5);
+    let d = sd_rounded_box(local, vec2<f32>(rect_w * 0.5, rect_h * 0.5), corner_r);
+    if d > 0.5 {
+      pixels[py * params.width + px] = pack_color(0.08, 0.08, 0.10, 1.0);
+      return;
+    }
+
+    // 6-color rotation
+    let phase = item_idx % 6u;
+    var cr = 0.0; var cg = 0.0; var cb = 0.0;
+    if phase == 0u { cr = 0.9; cg = 0.25; cb = 0.25; }
+    else if phase == 1u { cr = 0.2; cg = 0.75; cb = 0.3; }
+    else if phase == 2u { cr = 0.25; cg = 0.35; cb = 0.9; }
+    else if phase == 3u { cr = 0.95; cg = 0.7; cb = 0.1; }
+    else if phase == 4u { cr = 0.7; cg = 0.2; cb = 0.8; }
+    else { cr = 0.2; cg = 0.7; cb = 0.8; }
+
+    // AA edge
+    let aa = 1.0 - smoothstep(-1.0, 0.5, d);
+    cr = mix(0.08, cr, aa); cg = mix(0.08, cg, aa); cb = mix(0.10, cb, aa);
+
+    pixels[py * params.width + px] = pack_color(cr, cg, cb, 1.0);
+    return;
+  }
+
+  if content_px >= max_cpx || content_py >= max_cpy {
     pixels[py * params.width + px] = pack_color(0.08, 0.08, 0.10, 1.0);
     return;
   }

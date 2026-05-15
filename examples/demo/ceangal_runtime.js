@@ -248,7 +248,7 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
     canvas.width = pw; canvas.height = ph;
     _context = canvas.getContext("webgpu");
     _context.configure({ device: _device, format: _format, alphaMode: "premultiplied" });
-    ex.do_prepare?.(B(h(_device)), B(cw), B(ch), B(pw), B(ph),
+    ex.prepare_scene?.(B(h(_device)), B(cw), B(ch), B(pw), B(ph),
       B(img.vtx), B(img.idx), B(0), B(img.tex), B(img.samp));
   }
 
@@ -329,8 +329,8 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   let _interaction = null; // { type, region, axis }
 
   function doHitTest(mx, my) {
-    if (!ex.do_hit_test) return { type: HIT_REGION, region: 0 };
-    const packed = N(ex.do_hit_test(mx, my));
+    if (!ex.hit_test) return { type: HIT_REGION, region: 0 };
+    const packed = N(ex.hit_test(mx, my));
     return { type: (packed >> 8) & 0xFF, region: packed & 0xFF };
   }
 
@@ -367,10 +367,10 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
       _interaction = { type: hit.type, region: hit.region, axis: 1 };
       e.preventDefault();
     } else if (hit.type === HIT_TRACK_Y) {
-      ex.do_track_tap_at?.(B(hit.region), B(0), my);
+      ex.track_tap_at?.(B(hit.region), B(0), my);
       animator.kick(); e.preventDefault();
     } else if (hit.type === HIT_TRACK_X) {
-      ex.do_track_tap_at?.(B(hit.region), B(1), mx);
+      ex.track_tap_at?.(B(hit.region), B(1), mx);
       animator.kick(); e.preventDefault();
     }
   });
@@ -380,7 +380,7 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
     if (!_interaction) return;
     const rect = canvas.getBoundingClientRect();
     const pos = _interaction.axis === 0 ? e.clientY - rect.top : e.clientX - rect.left;
-    ex.do_scrollbar_drag_to?.(B(_interaction.region), B(_interaction.axis), pos);
+    ex.scrollbar_drag_to?.(B(_interaction.region), B(_interaction.axis), pos);
     animator.kick();
   });
 
