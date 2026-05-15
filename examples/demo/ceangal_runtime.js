@@ -264,15 +264,19 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   canvas.style.touchAction = "none";
   canvas.style.overscrollBehavior = "none";
 
+  // Hit test → region ID (cached per pointer position)
+  let _activeRegion = 0;
+
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
     const scale = e.deltaMode === 1 ? 20 : 1;
-    if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
-      const dx = -((Math.abs(e.deltaX) > Math.abs(e.deltaY)) ? e.deltaX : e.deltaY) * scale;
-      ex.scroll_wheel_x?.(dx);
-    } else {
-      ex.scroll_wheel?.(-e.deltaY * scale);
-    }
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    if (ex.scroll_hit_test) _activeRegion = N(ex.scroll_hit_test(mx, my));
+    const dy = -e.deltaY * scale;
+    const dx = (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY))
+      ? -((Math.abs(e.deltaX) > Math.abs(e.deltaY)) ? e.deltaX : e.deltaY) * scale : 0;
+    ex.scroll_wheel?.(B(_activeRegion), dx || 0, dy || 0);
     animator.kick();
   }, { passive: false });
 
@@ -309,11 +313,11 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
     const dy = e.clientY - _lastPY; _lastPY = e.clientY;
     _samples.push({ t: performance.now(), y: e.clientY });
     if (_samples.length > 8) _samples.shift();
-    ex.scroll_drag?.(dy);
+    ex.scroll_drag?.(B(_activeRegion), dy);
   });
   canvas.addEventListener("pointerup", (e) => {
     if (!_dragging) return; _dragging = false;
-    ex.scroll_release?.(estimateVelocity());
+    ex.scroll_release?.(B(_activeRegion), estimateVelocity());
     animator.kick();
   });
   canvas.addEventListener("pointercancel", () => { _dragging = false; });

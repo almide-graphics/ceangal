@@ -1,267 +1,301 @@
-// ceangal scroll — physics + scrollbar state
+// ceangal scroll engine — multi-region coordinator with nested bubble
 //
-// State machine per axis: IDLE → COASTING (friction) → BOUNCING (spring) → IDLE
-// Scrollbar: opacity fades in on scroll, out after idle delay.
+// Architecture:
+//   ScrollCoordinator manages N ScrollRegions (SoA layout)
+//   Each region has 2 axes (Y=0, X=1), each with independent physics
+//   Delta routing: consume locally → bubble remainder to parent
+//   GPU: per-region scroll offset + bounds, uploaded as flat buffer
+//
+// Design ref: Flutter _NestedScrollCoordinator (sequential cascade)
 
 import math
 
-fn powf(base: Float, exp: Float) -> Float = math.fpow(base, exp)
+// ── Constants ──
+
+let MAX_REGIONS = 8
+let MAX_AXES = 16  // MAX_REGIONS * 2
+
+let AXIS_Y = 0
+let AXIS_X = 1
 
 let IDLE = 0
 let COASTING = 1
 let BOUNCING = 2
 
-// ── Physics parameters ──
+// Physics
 let FRICTION = 0.035
-let BOUNCE_STIFFNESS = 120.0
-let BOUNCE_DAMPING = 22.0
+let STIFFNESS = 120.0
+let DAMPING = 22.0
 let MAX_OVERSCROLL = 100.0
-let VELOCITY_THRESHOLD = 0.3
-let VELOCITY_CAP = 6000.0
+let VEL_THRESHOLD = 0.3
+let VEL_CAP = 6000.0
 let WHEEL_SCALE = 2.0
 let BOUNCE_VEL_RETAIN = 0.12
 
-// ── Vertical state ──
-var pos_y = 0.0
-var vel_y = 0.0
-var min_y = 0.0
-var state_y = 0
-var bar_opacity_y = 0.0
-var bar_idle_y = 0.0
+// Scrollbar
+let FADE_DELAY = 1.2
+let FADE_DURATION = 0.3
 
-// ── Horizontal state ──
-var pos_x = 0.0
-var vel_x = 0.0
-var min_x = 0.0
-var state_x = 0
-var bar_opacity_x = 0.0
-var bar_idle_x = 0.0
-var bar_hover_y = 0.0
-var bar_hover_x = 0.0
+fn powf(base: Float, exp: Float) -> Float = math.fpow(base, exp)
 
-// ── Reset (for testing) ──
+// ── Region state (SoA) ──
 
-fn reset() -> Unit = {
-  pos_y = 0.0; vel_y = 0.0; min_y = 0.0; state_y = 0
-  pos_x = 0.0; vel_x = 0.0; min_x = 0.0; state_x = 0
-  bar_opacity_y = 0.0; bar_opacity_x = 0.0
-  bar_idle_y = 0.0; bar_idle_x = 0.0
-  bar_hover_y = 0.0; bar_hover_x = 0.0
+var region_count = 0
+
+// Region geometry (in parent's content space, CSS px)
+var rgn_bounds_x: List[Float] = list.repeat(0.0, 8)
+var rgn_bounds_y: List[Float] = list.repeat(0.0, 8)
+var rgn_bounds_w: List[Float] = list.repeat(0.0, 8)
+var rgn_bounds_h: List[Float] = list.repeat(0.0, 8)
+var rgn_content_w: List[Float] = list.repeat(0.0, 8)
+var rgn_content_h: List[Float] = list.repeat(0.0, 8)
+var rgn_parent: List[Int] = list.repeat(0 - 1, 8)
+
+// Per-axis state: index = region_id * 2 + axis (Y=0, X=1)
+var ax_pos: List[Float] = list.repeat(0.0, 16)
+var ax_vel: List[Float] = list.repeat(0.0, 16)
+var ax_min: List[Float] = list.repeat(0.0, 16)
+var ax_state: List[Int] = list.repeat(0, 16)
+var ax_bar_opacity: List[Float] = list.repeat(0.0, 16)
+var ax_bar_idle: List[Float] = list.repeat(0.0, 16)
+var ax_bar_hover: List[Float] = list.repeat(0.0, 16)
+
+// ── Axis index ──
+
+fn ax(region: Int, axis: Int) -> Int = region * 2 + axis
+
+// ── Region lifecycle ──
+
+fn create_region(content_w: Float, content_h: Float,
+                 viewport_w: Float, viewport_h: Float,
+                 parent: Int) -> Int = {
+  let id = region_count
+  region_count = region_count + 1
+  rgn_bounds_x[id] = 0.0
+  rgn_bounds_y[id] = 0.0
+  rgn_bounds_w[id] = viewport_w
+  rgn_bounds_h[id] = viewport_h
+  rgn_content_w[id] = content_w
+  rgn_content_h[id] = content_h
+  rgn_parent[id] = parent
+  // Compute scroll bounds
+  ax_min[ax(id, AXIS_Y)] = 0.0 - float.max(0.0, content_h - viewport_h)
+  ax_min[ax(id, AXIS_X)] = 0.0 - float.max(0.0, content_w - viewport_w)
+  id
 }
 
-// Set state directly (for testing)
-fn set_pos_y(v: Float) -> Unit = { pos_y = v }
-fn set_vel_y(v: Float) -> Unit = { vel_y = v }
-fn set_state_y(v: Int) -> Unit = { state_y = v }
-fn set_pos_x(v: Float) -> Unit = { pos_x = v }
-
-// ── Bounds ──
-
-fn set_bounds(content_w: Float, content_h: Float, viewport_w: Float, viewport_h: Float) -> Unit = {
-  min_y = 0.0 - float.max(0.0, content_h - viewport_h)
-  pos_y = float.max(min_y, float.min(0.0, pos_y))
-  min_x = 0.0 - float.max(0.0, content_w - viewport_w)
-  pos_x = float.max(min_x, float.min(0.0, pos_x))
+fn set_bounds(id: Int, x: Float, y: Float, w: Float, h: Float) -> Unit = {
+  rgn_bounds_x[id] = x
+  rgn_bounds_y[id] = y
+  rgn_bounds_w[id] = w
+  rgn_bounds_h[id] = h
 }
 
-// ── Internal ──
-
-fn is_over_y() -> Bool = pos_y > 0.5 or pos_y < min_y - 0.5
-fn is_over_x() -> Bool = pos_x > 0.5 or pos_x < min_x - 0.5
-
-fn tick_axis(pos: Float, vel: Float, min_bound: Float, st: Int, dt: Float) -> { p: Float, v: Float, s: Int } = {
-  var p = pos
-  var v = vel
-  var s = st
-  if s == COASTING then {
-    // Exponential friction: v *= (1 - FRICTION)^(dt * 60)
-    let decay = powf(1.0 - FRICTION, dt * 60.0)
-    v = v * decay
-    p = p + v * dt
-    let over = p > 0.5 or p < min_bound - 0.5
-    if over then {
-      s = BOUNCING
-      v = v * BOUNCE_VEL_RETAIN
-    } else if float.abs(v) < VELOCITY_THRESHOLD then {
-      s = IDLE
-    } else ()
-  } else if s == BOUNCING then {
-    // Critically damped spring
-    let target = if p < min_bound then min_bound else 0.0
-    let disp = p - target
-    let force = 0.0 - BOUNCE_STIFFNESS * disp - BOUNCE_DAMPING * v
-    v = v + force * dt
-    p = p + v * dt
-    p = float.max(min_bound - MAX_OVERSCROLL, float.min(MAX_OVERSCROLL, p))
-    if float.abs(disp) < 0.3 and float.abs(v) < 0.3 then {
-      p = target
-      v = 0.0
-      s = IDLE
-    } else ()
-  } else ()
-  { p: p, v: v, s: s }
+fn reset_all() -> Unit = {
+  region_count = 0
+  for i in 0..MAX_REGIONS {
+    rgn_bounds_x[i] = 0.0; rgn_bounds_y[i] = 0.0
+    rgn_bounds_w[i] = 0.0; rgn_bounds_h[i] = 0.0
+    rgn_content_w[i] = 0.0; rgn_content_h[i] = 0.0
+    rgn_parent[i] = 0 - 1
+  }
+  for i in 0..MAX_AXES {
+    ax_pos[i] = 0.0; ax_vel[i] = 0.0; ax_min[i] = 0.0
+    ax_state[i] = 0
+    ax_bar_opacity[i] = 0.0; ax_bar_idle[i] = 0.0; ax_bar_hover[i] = 0.0
+  }
 }
 
-// ── Wheel ──
+// ── Hit test (innermost region containing point, in root content space) ──
 
-fn wheel_y(dy: Float) -> Unit = {
-  vel_y = dy * WHEEL_SCALE
-  pos_y = pos_y + dy
-  state_y = if is_over_y() then BOUNCING else COASTING
-  bar_opacity_y = 1.0
-  bar_idle_y = 0.0
+fn hit_test(x: Float, y: Float) -> Int = {
+  // Walk regions in reverse (last created = innermost)
+  var result = 0  // default to root (region 0)
+  for i in 0..region_count {
+    let id = region_count - 1 - i
+    if id == 0 then () else {
+      // Transform point to parent's scrolled content space
+      let parent = rgn_parent[id]
+      let px = x - ax_pos[ax(parent, AXIS_X)]
+      let py = y - ax_pos[ax(parent, AXIS_Y)]
+      let bx = rgn_bounds_x[id]
+      let by = rgn_bounds_y[id]
+      if px >= bx and px < bx + rgn_bounds_w[id] and
+         py >= by and py < by + rgn_bounds_h[id] then {
+        result = id
+      } else ()
+    }
+  }
+  result
 }
 
-fn wheel_x(dx: Float) -> Unit = {
-  vel_x = dx * WHEEL_SCALE
-  pos_x = pos_x + dx
-  state_x = if is_over_x() then BOUNCING else COASTING
-  bar_opacity_x = 1.0
-  bar_idle_x = 0.0
-}
+// ── Single-axis physics ──
 
-// ── Drag ──
+fn is_over(i: Int) -> Bool =
+  ax_pos[i] > 0.5 or ax_pos[i] < ax_min[i] - 0.5
 
-// iOS-style rubber band: diminishing returns as overscroll increases
 fn rubber_band(delta: Float, over: Float) -> Float = {
   if over <= 0.0 then delta
-  else {
-    // d * (1 - log(1 + over/dim) / log_max)  where dim=MAX_OVERSCROLL
-    let ratio = over / MAX_OVERSCROLL
-    let resist = 1.0 / (1.0 + ratio * 2.5)
-    delta * resist
+  else delta / (1.0 + over / MAX_OVERSCROLL * 2.5)
+}
+
+// Consume delta on an axis. Returns unconsumed remainder.
+fn consume(i: Int, delta: Float) -> Float = {
+  let new_pos = ax_pos[i] + delta
+  // Clamp to bounds (no overscroll during consume — rubber band is separate)
+  let clamped = float.max(ax_min[i], float.min(0.0, new_pos))
+  let consumed = clamped - ax_pos[i]
+  ax_pos[i] = clamped
+  delta - consumed
+}
+
+fn tick_axis(i: Int, dt: Float) -> Unit = {
+  let s = ax_state[i]
+  if s == COASTING then {
+    let decay = powf(1.0 - FRICTION, dt * 60.0)
+    ax_vel[i] = ax_vel[i] * decay
+    ax_pos[i] = ax_pos[i] + ax_vel[i] * dt
+    if is_over(i) then {
+      ax_state[i] = BOUNCING
+      ax_vel[i] = ax_vel[i] * BOUNCE_VEL_RETAIN
+    } else if float.abs(ax_vel[i]) < VEL_THRESHOLD then {
+      ax_state[i] = IDLE
+    } else ()
+  } else if s == BOUNCING then {
+    let target = if ax_pos[i] < ax_min[i] then ax_min[i] else 0.0
+    let disp = ax_pos[i] - target
+    let force = 0.0 - STIFFNESS * disp - DAMPING * ax_vel[i]
+    ax_vel[i] = ax_vel[i] + force * dt
+    ax_pos[i] = ax_pos[i] + ax_vel[i] * dt
+    ax_pos[i] = float.max(ax_min[i] - MAX_OVERSCROLL, float.min(MAX_OVERSCROLL, ax_pos[i]))
+    if float.abs(disp) < 0.3 and float.abs(ax_vel[i]) < 0.3 then {
+      ax_pos[i] = target
+      ax_vel[i] = 0.0
+      ax_state[i] = IDLE
+    } else ()
+  } else ()
+}
+
+fn tick_bar(i: Int, dt: Float) -> Unit = {
+  if ax_state[i] == IDLE then {
+    ax_bar_idle[i] = ax_bar_idle[i] + dt
+    if ax_bar_idle[i] > FADE_DELAY then {
+      ax_bar_opacity[i] = float.max(0.0, ax_bar_opacity[i] - dt / FADE_DURATION)
+    } else ()
+  } else {
+    ax_bar_opacity[i] = 1.0
+    ax_bar_idle[i] = 0.0
   }
 }
 
-fn drag_y(dy: Float) -> Unit = {
-  let over = if pos_y > 0.0 then pos_y
-             else if pos_y < min_y then min_y - pos_y
+fn show_bar(i: Int) -> Unit = {
+  ax_bar_opacity[i] = 1.0
+  ax_bar_idle[i] = 0.0
+}
+
+// ── Coordinator: delta routing with bubble ──
+
+fn route_wheel_axis(region: Int, axis: Int, delta: Float) -> Unit = {
+  let i = ax(region, axis)
+  // Apply to this region, bubble remainder to parent
+  let remainder = consume(i, delta)
+  ax_vel[i] = delta * WHEEL_SCALE
+  ax_state[i] = if is_over(i) then BOUNCING else COASTING
+  show_bar(i)
+  // Bubble unconsumed delta to parent
+  if float.abs(remainder) > 0.1 and rgn_parent[region] >= 0 then {
+    route_wheel_axis(rgn_parent[region], axis, remainder)
+  } else ()
+}
+
+fn route_wheel(region: Int, dx: Float, dy: Float) -> Unit = {
+  if float.abs(dy) > 0.1 then route_wheel_axis(region, AXIS_Y, dy) else ()
+  if float.abs(dx) > 0.1 then route_wheel_axis(region, AXIS_X, dx) else ()
+}
+
+fn route_drag(region: Int, dy: Float) -> Unit = {
+  let i = ax(region, AXIS_Y)
+  let over = if ax_pos[i] > 0.0 then ax_pos[i]
+             else if ax_pos[i] < ax_min[i] then ax_min[i] - ax_pos[i]
              else 0.0
-  pos_y = pos_y + rubber_band(dy, over)
-  state_y = IDLE
-  bar_opacity_y = 1.0
-  bar_idle_y = 0.0
+  ax_pos[i] = ax_pos[i] + rubber_band(dy, over)
+  ax_state[i] = IDLE
+  show_bar(i)
 }
 
-fn release_y(vel: Float) -> Unit = {
+fn route_release(region: Int, vel: Float) -> Unit = {
+  let i = ax(region, AXIS_Y)
   let sign = if vel > 0.0 then 1.0 else 0.0 - 1.0
-  let capped = if float.abs(vel) > VELOCITY_CAP then VELOCITY_CAP * sign else vel
-  vel_y = capped
-  state_y = if float.abs(capped) > 0.5 then COASTING
-            else if is_over_y() then BOUNCING
-            else IDLE
+  let capped = if float.abs(vel) > VEL_CAP then VEL_CAP * sign else vel
+  ax_vel[i] = capped
+  ax_state[i] = if float.abs(capped) > 0.5 then COASTING
+                else if is_over(i) then BOUNCING
+                else IDLE
 }
 
-// ── Scrollbar interaction ──
+// ── Tick all ──
 
-fn scrollbar_thumb_y(viewport_h: Float, content_h: Float) -> { top: Float, height: Float } = {
-  if content_h <= viewport_h or viewport_h < 1.0 then { top: 0.0, height: 0.0 }
-  else {
-    let th = float.max(40.0, viewport_h * viewport_h / content_h)
-    let range = content_h - viewport_h
-    let frac = (0.0 - pos_y) / range
-    let top = float.max(0.0, float.min(viewport_h - th, frac * (viewport_h - th)))
-    { top: top, height: th }
-  }
-}
-
-fn scrollbar_set_y(frac: Float, content_h: Float, viewport_h: Float) -> Unit = {
-  let range = content_h - viewport_h
-  pos_y = 0.0 - float.max(0.0, float.min(range, frac * range))
-  vel_y = 0.0
-  state_y = IDLE
-  bar_opacity_y = 1.0
-  bar_idle_y = 0.0
-}
-
-fn scrollbar_thumb_x(viewport_w: Float, content_w: Float) -> { left: Float, width: Float } = {
-  if content_w <= viewport_w or viewport_w < 1.0 then { left: 0.0, width: 0.0 }
-  else {
-    let tw = float.max(40.0, viewport_w * viewport_w / content_w)
-    let range = content_w - viewport_w
-    let frac = (0.0 - pos_x) / range
-    let left = float.max(0.0, float.min(viewport_w - tw, frac * (viewport_w - tw)))
-    { left: left, width: tw }
-  }
-}
-
-fn scrollbar_set_x(frac: Float, content_w: Float, viewport_w: Float) -> Unit = {
-  let range = content_w - viewport_w
-  pos_x = 0.0 - float.max(0.0, float.min(range, frac * range))
-  vel_x = 0.0
-  state_x = IDLE
-  bar_opacity_x = 1.0
-  bar_idle_x = 0.0
-}
-
-// ── Hover ──
-
-fn set_hover_y(h: Float) -> Unit = { bar_hover_y = h }
-fn set_hover_x(h: Float) -> Unit = { bar_hover_x = h }
-
-// ── Track tap (page scroll to click position) ──
-
-fn track_tap_y(click_y: Float, viewport_h: Float, content_h: Float) -> Unit = {
-  if content_h <= viewport_h then () else {
-    let range = content_h - viewport_h
-    let frac = click_y / viewport_h
-    pos_y = 0.0 - float.max(0.0, float.min(range, frac * range))
-    vel_y = 0.0
-    state_y = IDLE
-    bar_opacity_y = 1.0
-    bar_idle_y = 0.0
-  }
-}
-
-fn track_tap_x(click_x: Float, viewport_w: Float, content_w: Float) -> Unit = {
-  if content_w <= viewport_w then () else {
-    let range = content_w - viewport_w
-    let frac = click_x / viewport_w
-    pos_x = 0.0 - float.max(0.0, float.min(range, frac * range))
-    vel_x = 0.0
-    state_x = IDLE
-    bar_opacity_x = 1.0
-    bar_idle_x = 0.0
-  }
-}
-
-// ── Tick (both axes) ──
-
-fn tick(dt_raw: Float) -> Int = {
+fn tick_all(dt_raw: Float) -> Int = {
   let dt = float.min(dt_raw, 1.0 / 30.0)
-
-  // Physics
-  let ry = tick_axis(pos_y, vel_y, min_y, state_y, dt)
-  pos_y = ry.p
-  vel_y = ry.v
-  state_y = ry.s
-
-  let rx = tick_axis(pos_x, vel_x, min_x, state_x, dt)
-  pos_x = rx.p
-  vel_x = rx.v
-  state_x = rx.s
-
-  // Scrollbar fade
-  if state_y == IDLE then {
-    bar_idle_y = bar_idle_y + dt
-    if bar_idle_y > 1.2 then {
-      bar_opacity_y = float.max(0.0, bar_opacity_y - dt / 0.3)
-    } else ()
-  } else {
-    bar_opacity_y = 1.0
-    bar_idle_y = 0.0
+  var any_active = false
+  for id in 0..region_count {
+    let iy = ax(id, AXIS_Y)
+    let ix = ax(id, AXIS_X)
+    tick_axis(iy, dt)
+    tick_axis(ix, dt)
+    tick_bar(iy, dt)
+    tick_bar(ix, dt)
+    if ax_state[iy] != IDLE or ax_state[ix] != IDLE then { any_active = true } else ()
+    if ax_bar_opacity[iy] > 0.01 or ax_bar_opacity[ix] > 0.01 then { any_active = true } else ()
   }
-  if state_x == IDLE then {
-    bar_idle_x = bar_idle_x + dt
-    if bar_idle_x > 1.2 then {
-      bar_opacity_x = float.max(0.0, bar_opacity_x - dt / 0.3)
-    } else ()
-  } else {
-    bar_opacity_x = 1.0
-    bar_idle_x = 0.0
-  }
+  if any_active then 1 else 0
+}
 
-  let scrolling = state_y != IDLE or state_x != IDLE
-  let fading = bar_opacity_y > 0.01 or bar_opacity_x > 0.01
-  if scrolling or fading then 1 else 0
+// ── Scrollbar geometry ──
+
+fn thumb_info(i: Int, viewport: Float, content: Float) -> { pos: Float, size: Float } = {
+  if content <= viewport or viewport < 1.0 then { pos: 0.0, size: 0.0 }
+  else {
+    let sz = float.max(36.0, viewport * viewport / content)
+    let range = content - viewport
+    let frac = (0.0 - ax_pos[i]) / range
+    let p = float.max(0.0, float.min(viewport - sz, frac * (viewport - sz)))
+    { pos: p, size: sz }
+  }
+}
+
+fn set_scrollbar_frac(i: Int, frac: Float, content: Float, viewport: Float) -> Unit = {
+  let range = content - viewport
+  ax_pos[i] = 0.0 - float.max(0.0, float.min(range, frac * range))
+  ax_vel[i] = 0.0
+  ax_state[i] = IDLE
+  show_bar(i)
+}
+
+fn track_tap(i: Int, click_pos: Float, viewport: Float, content: Float) -> Unit = {
+  if content <= viewport then () else {
+    let range = content - viewport
+    let frac = click_pos / viewport
+    ax_pos[i] = 0.0 - float.max(0.0, float.min(range, frac * range))
+    ax_vel[i] = 0.0
+    ax_state[i] = IDLE
+    show_bar(i)
+  }
+}
+
+// ── Accessors (for testing + external use) ──
+
+fn get_pos(region: Int, axis: Int) -> Float = ax_pos[ax(region, axis)]
+fn get_vel(region: Int, axis: Int) -> Float = ax_vel[ax(region, axis)]
+fn get_state(region: Int, axis: Int) -> Int = ax_state[ax(region, axis)]
+fn get_bar_opacity(region: Int, axis: Int) -> Float = ax_bar_opacity[ax(region, axis)]
+fn get_bar_hover(region: Int, axis: Int) -> Float = ax_bar_hover[ax(region, axis)]
+fn get_min(region: Int, axis: Int) -> Float = ax_min[ax(region, axis)]
+
+fn set_pos(region: Int, axis: Int, v: Float) -> Unit = { ax_pos[ax(region, axis)] = v }
+fn set_vel(region: Int, axis: Int, v: Float) -> Unit = { ax_vel[ax(region, axis)] = v }
+fn set_state(region: Int, axis: Int, v: Int) -> Unit = { ax_state[ax(region, axis)] = v }
+fn set_hover(region: Int, axis: Int, v: Float) -> Unit = {
+  ax_bar_hover[ax(region, axis)] = v
+  if v > 0.5 then show_bar(ax(region, axis)) else ()
 }

@@ -5,7 +5,7 @@
 
 import self.dom as dom
 import self.layout as layout
-import self.scroll as scroll
+import self.scroll as sc
 import snaidhm
 import snaidhm.ttf as ttf
 
@@ -22,31 +22,26 @@ var cached_scene: snaidhm.SceneHandle = {
 var scene_ready = false
 var viewport_w = 0.0
 var viewport_h = 0.0
-var content_w = 0.0
-var content_h = 0.0
-
-// ── NDC helpers ──
-
-fn px_to_ndc_x(px: Float, vw: Float) -> Float = px / vw * 2.0 - 1.0
-fn px_to_ndc_y(px: Float, vh: Float) -> Float = 1.0 - px / vh * 2.0
-fn px_to_ndc_w(px: Float, vw: Float) -> Float = px / vw * 2.0
-fn px_to_ndc_h(px: Float, vh: Float) -> Float = px / vh * 2.0
+var root_region = 0
+var focused_region = 0
 
 // ── Drawing ──
 
-fn dpr_scale() -> Float = int.to_float(cached_scene.height) / viewport_h
+fn dpr() -> Float = int.to_float(cached_scene.height) / viewport_h
 
 fn draw_at_scroll() -> Unit = {
   if scene_ready then {
-    let s = dpr_scale()
+    let s = dpr()
+    let ry = sc.ax(root_region, sc.AXIS_Y)
+    let rx = sc.ax(root_region, sc.AXIS_X)
     snaidhm.draw_frame_2d(cached_scene,
-      scroll.pos_x * s, scroll.pos_y * s,
-      scroll.bar_opacity_y, scroll.bar_opacity_x,
-      scroll.bar_hover_y, scroll.bar_hover_x)
+      sc.ax_pos[rx] * s, sc.ax_pos[ry] * s,
+      sc.ax_bar_opacity[ry], sc.ax_bar_opacity[rx],
+      sc.ax_bar_hover[ry], sc.ax_bar_hover[rx])
   } else ()
 }
 
-// ── Prepare (called on init + resize) ──
+// ── Prepare ──
 
 @export(wasm, "prepare_scene")
 fn do_prepare(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int,
@@ -55,9 +50,9 @@ fn do_prepare(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int,
   let vh = int.to_float(css_h)
   let data = build_test_scene(vw, vh)
 
-  let dpr = int.to_float(phys_h) / vh
-  let cw = float.to_int(data.content_w * dpr) / 16 * 16
-  let ch = float.to_int(data.content_h * dpr) / 16 * 16
+  let d = int.to_float(phys_h) / vh
+  let cw = float.to_int(data.content_w * d) / 16 * 16
+  let ch = float.to_int(data.content_h * d) / 16 * 16
   cached_scene = snaidhm.prepare_scene(device, phys_w, phys_h, cw, ch,
     data.cubics, data.shadows, data.paints,
     img_vtx, img_idx, img_count, img_texture, img_sampler)
@@ -65,122 +60,127 @@ fn do_prepare(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int,
   scene_ready = true
   viewport_w = vw
   viewport_h = vh
-  content_w = data.content_w
-  content_h = data.content_h
-  scroll.set_bounds(data.content_w, data.content_h, vw, vh)
+
+  sc.reset_all()
+  root_region = sc.create_region(data.content_w, data.content_h, vw, vh, 0 - 1)
+  focused_region = root_region
+
   snaidhm.draw_frame(cached_scene, 0.0)
 }
 
-// ── Scroll exports ──
+// ── Scroll event exports ──
+
+@export(wasm, "scroll_hit_test")
+fn scroll_hit_test(x: Float, y: Float) -> Int = sc.hit_test(x, y)
 
 @export(wasm, "scroll_wheel")
-fn scroll_wheel(dy: Float) -> Unit = { scroll.wheel_y(dy); draw_at_scroll() }
-
-@export(wasm, "scroll_wheel_x")
-fn scroll_wheel_x(dx: Float) -> Unit = { scroll.wheel_x(dx); draw_at_scroll() }
+fn scroll_wheel(region: Int, dx: Float, dy: Float) -> Unit = {
+  sc.route_wheel(region, dx, dy)
+  draw_at_scroll()
+}
 
 @export(wasm, "scroll_drag")
-fn scroll_drag(dy: Float) -> Unit = { scroll.drag_y(dy); draw_at_scroll() }
+fn scroll_drag(region: Int, dy: Float) -> Unit = {
+  sc.route_drag(region, dy)
+  draw_at_scroll()
+}
 
 @export(wasm, "scroll_release")
-fn scroll_release(vel: Float) -> Unit = scroll.release_y(vel)
+fn scroll_release(region: Int, vel: Float) -> Unit = sc.route_release(region, vel)
 
 @export(wasm, "scroll_tick")
 fn scroll_tick(dt: Float) -> Int = {
-  let running = scroll.tick(dt)
+  let running = sc.tick_all(dt)
   draw_at_scroll()
   running
 }
 
-// ── Scrollbar exports (JS queries geometry for hit testing) ──
+// ── Scrollbar exports (root region for now, generalize later) ──
 
 @export(wasm, "scrollbar_info_y")
 fn scrollbar_info_y() -> Float = {
-  // Pack thumb_top and thumb_height as two values via separate exports
-  let t = scroll.scrollbar_thumb_y(viewport_h, content_h)
-  t.top
+  let t = sc.thumb_info(sc.ax(root_region, sc.AXIS_Y), viewport_h, sc.rgn_content_h[root_region])
+  t.pos
 }
 
 @export(wasm, "scrollbar_height_y")
 fn scrollbar_height_y() -> Float = {
-  let t = scroll.scrollbar_thumb_y(viewport_h, content_h)
-  t.height
+  let t = sc.thumb_info(sc.ax(root_region, sc.AXIS_Y), viewport_h, sc.rgn_content_h[root_region])
+  t.size
 }
 
 @export(wasm, "scrollbar_set_frac_y")
 fn scrollbar_set_frac_y(frac: Float) -> Unit = {
-  scroll.scrollbar_set_y(frac, content_h, viewport_h)
+  sc.set_scrollbar_frac(sc.ax(root_region, sc.AXIS_Y), frac, sc.rgn_content_h[root_region], viewport_h)
   draw_at_scroll()
 }
 
 @export(wasm, "scrollbar_info_x")
 fn scrollbar_info_x() -> Float = {
-  let t = scroll.scrollbar_thumb_x(viewport_w, content_w)
-  t.left
+  let t = sc.thumb_info(sc.ax(root_region, sc.AXIS_X), viewport_w, sc.rgn_content_w[root_region])
+  t.pos
 }
 
 @export(wasm, "scrollbar_width_x")
 fn scrollbar_width_x() -> Float = {
-  let t = scroll.scrollbar_thumb_x(viewport_w, content_w)
-  t.width
+  let t = sc.thumb_info(sc.ax(root_region, sc.AXIS_X), viewport_w, sc.rgn_content_w[root_region])
+  t.size
 }
 
 @export(wasm, "scrollbar_set_frac_x")
 fn scrollbar_set_frac_x(frac: Float) -> Unit = {
-  scroll.scrollbar_set_x(frac, content_w, viewport_w)
+  sc.set_scrollbar_frac(sc.ax(root_region, sc.AXIS_X), frac, sc.rgn_content_w[root_region], viewport_w)
   draw_at_scroll()
 }
 
-// ── Scrollbar hover ──
-
 @export(wasm, "scrollbar_set_hover_y")
 fn scrollbar_set_hover_y(h: Float) -> Unit = {
-  scroll.set_hover_y(h)
-  // Show scrollbar on hover even if not scrolling
-  if h > 0.5 then { scroll.bar_opacity_y = 1.0; scroll.bar_idle_y = 0.0 } else ()
+  sc.set_hover(root_region, sc.AXIS_Y, h)
   draw_at_scroll()
 }
 
 @export(wasm, "scrollbar_set_hover_x")
 fn scrollbar_set_hover_x(h: Float) -> Unit = {
-  scroll.set_hover_x(h)
-  if h > 0.5 then { scroll.bar_opacity_x = 1.0; scroll.bar_idle_x = 0.0 } else ()
+  sc.set_hover(root_region, sc.AXIS_X, h)
   draw_at_scroll()
 }
 
-// ── Track tap ──
-
 @export(wasm, "scrollbar_track_tap_y")
 fn scrollbar_track_tap_y(click_y: Float) -> Unit = {
-  scroll.track_tap_y(click_y, viewport_h, content_h)
+  sc.track_tap(sc.ax(root_region, sc.AXIS_Y), click_y, viewport_h, sc.rgn_content_h[root_region])
   draw_at_scroll()
 }
 
 @export(wasm, "scrollbar_track_tap_x")
 fn scrollbar_track_tap_x(click_x: Float) -> Unit = {
-  scroll.track_tap_x(click_x, viewport_w, content_w)
+  sc.track_tap(sc.ax(root_region, sc.AXIS_X), click_x, viewport_w, sc.rgn_content_w[root_region])
   draw_at_scroll()
 }
 
 // ── Keyboard scroll ──
-// key codes: 0=up, 1=down, 2=left, 3=right, 4=pageup, 5=pagedown, 6=home, 7=end
 
 @export(wasm, "scroll_key")
 fn scroll_key(key: Int) -> Unit = {
   let line = 40.0
   let page = viewport_h * 0.85
-  if key == 0 then { scroll.wheel_y(line); draw_at_scroll() }
-  else if key == 1 then { scroll.wheel_y(0.0 - line); draw_at_scroll() }
-  else if key == 2 then { scroll.wheel_x(line); draw_at_scroll() }
-  else if key == 3 then { scroll.wheel_x(0.0 - line); draw_at_scroll() }
-  else if key == 4 then { scroll.wheel_y(page); draw_at_scroll() }
-  else if key == 5 then { scroll.wheel_y(0.0 - page); draw_at_scroll() }
-  else if key == 6 then { scroll.scrollbar_set_y(0.0, content_h, viewport_h); draw_at_scroll() }
-  else if key == 7 then { scroll.scrollbar_set_y(1.0, content_h, viewport_h); draw_at_scroll() }
+  let r = focused_region
+  if key == 0 then sc.route_wheel(r, 0.0, line)
+  else if key == 1 then sc.route_wheel(r, 0.0, 0.0 - line)
+  else if key == 2 then sc.route_wheel(r, line, 0.0)
+  else if key == 3 then sc.route_wheel(r, 0.0 - line, 0.0)
+  else if key == 4 then sc.route_wheel(r, 0.0, page)
+  else if key == 5 then sc.route_wheel(r, 0.0, 0.0 - page)
+  else if key == 6 then {
+    sc.set_scrollbar_frac(sc.ax(r, sc.AXIS_Y), 0.0, sc.rgn_content_h[r], viewport_h)
+  }
+  else if key == 7 then {
+    sc.set_scrollbar_frac(sc.ax(r, sc.AXIS_Y), 1.0, sc.rgn_content_h[r], viewport_h)
+  }
   else ()
+  draw_at_scroll()
 }
 
-// ── Legacy compat ──
+// ── Legacy ──
 
 @export(wasm, "render_scene")
 fn do_render(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int,
@@ -188,8 +188,10 @@ fn do_render(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int,
   do_prepare(device, css_w, css_h, phys_w, phys_h, img_vtx, img_idx, img_count, img_texture, img_sampler)
 
 // ══════════════════════════════════════════════════════════════
-// Test scene (temporary — replace with real content builder)
+// Test scene (temporary)
 // ══════════════════════════════════════════════════════════════
+
+let AUTO = -1.0
 
 type SceneData = {
   cubics: List[snaidhm.Cubic],
@@ -202,7 +204,6 @@ type SceneData = {
 fn build_test_scene(vw: Float, vh: Float) -> SceneData = {
   let dc = [0.5, 0.5, 0.5, 1.0]
   let r = 0.01
-  // 200vw × 200vh: 4 quadrants (red / green / blue / yellow)
   let cubics =
     snaidhm.round_rect_cubics(-1.0, -1.0, 2.0, 2.0, r, dc, 0) +
     snaidhm.round_rect_cubics(1.0,  -1.0, 2.0, 2.0, r, dc, 1) +
@@ -218,13 +219,7 @@ fn build_test_scene(vw: Float, vh: Float) -> SceneData = {
   { cubics: cubics, paints: paints, shadows: shadows, content_w: vw * 2.0, content_h: vh * 2.0 }
 }
 
-// ══════════════════════════════════════════════════════════════
-// DOM overlay (music player demo — dormant, kept for future use)
-// ══════════════════════════════════════════════════════════════
-
-let AUTO = -1.0
-let ALIGN_LEFT = 0
-let ALIGN_CENTER = 1
+// ── DOM (dormant) ──
 
 fn s(text: String) -> Int = {
   dom.begin_str()
@@ -245,19 +240,8 @@ fn float_to_px(v: Float) -> Int = {
 
 type TextEntry = { rect_idx: Int, chars: List[Int], font_size: Float, color: List[Float], align: Int }
 
-fn text_leaf(font: ttf.Font, text: String, font_size: Float, vh: Float) -> layout.Node = {
-  let chars = string.to_bytes(text)
-  let upm = int.to_float(font.units_per_em)
-  let scale = font_size * 2.0 / vh / upm
-  let w_px = list.fold(chars, 0.0, (acc, ch) =>
-    acc + int.to_float(ttf.get_advance_width(font, ttf.char_to_glyph_id(font, ch))) * scale
-  ) * vh / 2.0
-  layout.leaf(w_px, font_size * 1.2)
-}
-
 @export(wasm, "init_overlay")
 fn init_overlay(overlay: Int, canvas_w: Int, canvas_h: Int) -> Unit = ()
-
 @export(wasm, "textarea_x")
 fn textarea_x(vw: Int, vh: Int) -> Float = 0.0
 @export(wasm, "textarea_y")

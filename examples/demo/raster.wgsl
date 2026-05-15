@@ -117,12 +117,42 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
   let py = gid.y;
   if (px >= params.width || py >= params.height) { return; }
 
-  let content_px = f32(px) - params.scroll_x;
-  let content_py = f32(py) - params.scroll_y;
-  let max_content_px = f32(params.content_tiles_x * TILE_SIZE);
-  let max_content_py = f32(params.content_tiles_y * TILE_SIZE);
+  let w = f32(params.width);
+  let h = f32(params.height);
+  let max_cpx = f32(params.content_tiles_x * TILE_SIZE);
+  let max_cpy = f32(params.content_tiles_y * TILE_SIZE);
 
-  if content_px < 0.0 || content_px >= max_content_px || content_py < 0.0 || content_py >= max_content_py {
+  var content_px = f32(px) - params.scroll_x;
+  var content_py = f32(py) - params.scroll_y;
+
+  // ── Overscroll stretch (iOS rubber band visual) ──
+  // Quadratic: f(t) = t*(1+sf) - t²*sf. f(0)=0, f(1)=1, f'(0)=1+sf (stretched at pull edge)
+  let smin_y = -(max_cpy - h);
+  let ov_top = max(params.scroll_y, 0.0);
+  let ov_bot = max(-(params.scroll_y - smin_y), 0.0);
+  if ov_top > 0.5 {
+    let sf = clamp(ov_top / h * 0.8, 0.0, 0.35);
+    let t = f32(py) / h;
+    content_py = (t * (1.0 + sf) - t * t * sf) * h;
+  } else if ov_bot > 0.5 {
+    let sf = clamp(ov_bot / h * 0.8, 0.0, 0.35);
+    let t = (h - f32(py)) / h;
+    content_py = max_cpy - (t * (1.0 + sf) - t * t * sf) * h;
+  }
+  let smin_x = -(max_cpx - w);
+  let ov_left = max(params.scroll_x, 0.0);
+  let ov_right = max(-(params.scroll_x - smin_x), 0.0);
+  if ov_left > 0.5 {
+    let sf = clamp(ov_left / w * 0.8, 0.0, 0.35);
+    let t = f32(px) / w;
+    content_px = (t * (1.0 + sf) - t * t * sf) * w;
+  } else if ov_right > 0.5 {
+    let sf = clamp(ov_right / w * 0.8, 0.0, 0.35);
+    let t = (w - f32(px)) / w;
+    content_px = max_cpx - (t * (1.0 + sf) - t * t * sf) * w;
+  }
+
+  if content_px < 0.0 || content_px >= max_cpx || content_py < 0.0 || content_py >= max_cpy {
     pixels[py * params.width + px] = pack_color(0.08, 0.08, 0.10, 1.0);
     return;
   }
