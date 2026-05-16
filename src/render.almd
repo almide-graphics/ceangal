@@ -1,0 +1,81 @@
+// Ceangal render — View tree → layout → GPU-ready flat list
+//
+// Pipeline:
+//   1. View tree → layout.Node tree (style → flexbox props)
+//   2. layout.layout() → LayoutRect[] (pixel positions)
+//   3. Zip LayoutRect + View.style → RenderItem[] (GPU-ready)
+
+import self.view as v
+import self.layout as lay
+
+// ── Render item (flat, GPU-ready) ──
+
+type RenderItem = {
+  x: Float, y: Float, w: Float, h: Float,
+  bg_r: Float, bg_g: Float, bg_b: Float, bg_a: Float,
+  fg_r: Float, fg_g: Float, fg_b: Float, fg_a: Float,
+  rounded: Float, opacity: Float,
+  content: String,
+  kind: Int,
+}
+
+// ── View → layout.Node conversion ──
+
+fn view_to_node(view: v.View) -> lay.Node = {
+  let s = view.style
+  let base = if view.kind == v.ROW then lay.row(view.children |> list.map(view_to_node))
+             else if view.kind == v.COL then lay.col(view.children |> list.map(view_to_node))
+             else if view.kind == v.BOX then lay.col(view.children |> list.map(view_to_node))
+             else lay.leaf(s.width, s.height)
+
+  // Apply style properties to layout node
+  let with_padding = if s.pt > 0.0 or s.pr > 0.0 or s.pb > 0.0 or s.pl > 0.0 then
+    lay.with_padding(base, { top: s.pt, right: s.pr, bottom: s.pb, left: s.pl })
+  else base
+
+  let with_margin = if s.mt > 0.0 or s.mr > 0.0 or s.mb > 0.0 or s.ml > 0.0 then
+    lay.with_margin(with_padding, { top: s.mt, right: s.mr, bottom: s.mb, left: s.ml })
+  else with_padding
+
+  let with_grow = if s.grow > 0.0 then lay.with_grow(with_margin, s.grow)
+                  else with_margin
+
+  let with_gap = if s.gap > 0.0 then lay.with_gap(with_grow, s.gap)
+                 else with_grow
+
+  with_gap
+}
+
+// ── Layout + zip ──
+
+fn render(view: v.View, viewport_w: Float, viewport_h: Float) -> List[RenderItem] = {
+  let root_node = view_to_node(view)
+  let rects = lay.layout(root_node, viewport_w, viewport_h)
+  zip_view_rects(view, rects, 0).items
+}
+
+// Recursive zip: walk View tree and LayoutRect[] in pre-order
+type ZipResult = { items: List[RenderItem], index: Int }
+
+fn zip_view_rects(view: v.View, rects: List[lay.LayoutRect], idx: Int) -> ZipResult = {
+  if idx >= list.len(rects) then { items: [], index: idx }
+  else {
+    let r = rects[idx]
+    let s = view.style
+    let item = {
+      x: r.x, y: r.y, w: r.w, h: r.h,
+      bg_r: s.bg.r, bg_g: s.bg.g, bg_b: s.bg.b, bg_a: s.bg.a,
+      fg_r: s.fg.r, fg_g: s.fg.g, fg_b: s.fg.b, fg_a: s.fg.a,
+      rounded: s.rounded, opacity: s.opacity,
+      content: view.content, kind: view.kind,
+    }
+    var items = [item]
+    var next_idx = idx + 1
+    for child in view.children {
+      let child_result = zip_view_rects(child, rects, next_idx)
+      items = items + child_result.items
+      next_idx = child_result.index
+    }
+    { items: items, index: next_idx }
+  }
+}

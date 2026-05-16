@@ -52,7 +52,7 @@ let default_style: Style = {
 type View = {
   kind: Int,
   children: List[View],
-  text: String,
+  content: String,
   style: Style,
   on_click: Int,
   key: Int,
@@ -61,16 +61,16 @@ type View = {
 // ── Constructors ──
 
 fn text(content: String) -> View =
-  { kind: TEXT, children: [], text: content, style: default_style, on_click: 0, key: 0 }
+  { kind: TEXT, children: [], content: content, style: default_style, on_click: 0, key: 0 }
 
 fn box(children: List[View]) -> View =
-  { kind: BOX, children: children, text: "", style: default_style, on_click: 0, key: 0 }
+  { kind: BOX, children: children, content: "", style: default_style, on_click: 0, key: 0 }
 
 fn row(children: List[View]) -> View =
-  { kind: ROW, children: children, text: "", style: default_style, on_click: 0, key: 0 }
+  { kind: ROW, children: children, content: "", style: default_style, on_click: 0, key: 0 }
 
 fn col(children: List[View]) -> View =
-  { kind: COL, children: children, text: "", style: default_style, on_click: 0, key: 0 }
+  { kind: COL, children: children, content: "", style: default_style, on_click: 0, key: 0 }
 
 // ── Pipe: Layout ──
 
@@ -133,7 +133,7 @@ let PATCH_REPLACE = 3
 
 fn diff_node(old: View, new: View) -> Int = {
   if old.kind != new.kind then PATCH_REPLACE
-  else if old.text != new.text then PATCH_RELAYOUT
+  else if old.content != new.content then PATCH_RELAYOUT
   else if layout_changed(old.style, new.style) then PATCH_RELAYOUT
   else if paint_changed(old.style, new.style) then PATCH_REPAINT
   else PATCH_NONE
