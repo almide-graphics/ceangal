@@ -15,6 +15,7 @@ type RenderItem = {
   bg_r: Float, bg_g: Float, bg_b: Float, bg_a: Float,
   fg_r: Float, fg_g: Float, fg_b: Float, fg_a: Float,
   rounded: Float, opacity: Float, font_size: Float,
+  selectable: Int,
   content: String,
   kind: Int,
 }
@@ -22,19 +23,19 @@ type RenderItem = {
 // ── View → layout.Node conversion ──
 
 fn view_to_node(view: v.View) -> lay.Node = {
-  let s = view.style
+  let s = view._style
   // TEXT: estimate size from content + font_size
-  let base = if view.kind == v.TEXT then {
+  let base = if view._kind == v.TEXT then {
                let char_w = s.font_size * 0.6
-               let text_w = int.to_float(string.len(view.content)) * char_w
+               let text_w = int.to_float(string.len(view._content)) * char_w
                let text_h = s.font_size * 1.4
                let w = if s.width > 0.0 then s.width else text_w
                let h = if s.height > 0.0 then s.height else text_h
                lay.leaf(w, h)
              }
-             else if view.kind == v.ROW then lay.row(view.children |> list.map(view_to_node))
-             else if view.kind == v.COL then lay.col(view.children |> list.map(view_to_node))
-             else if view.kind == v.BOX then lay.col(view.children |> list.map(view_to_node))
+             else if view._kind == v.ROW then lay.row(view._children |> list.map(view_to_node))
+             else if view._kind == v.COL then lay.col(view._children |> list.map(view_to_node))
+             else if view._kind == v.BOX then lay.col(view._children |> list.map(view_to_node))
              else lay.leaf(s.width, s.height)
 
   // Apply style properties to layout node
@@ -59,7 +60,7 @@ fn view_to_node(view: v.View) -> lay.Node = {
 
 fn render(view: v.View, viewport_w: Float, viewport_h: Float) -> List[RenderItem] = {
   // Root View gets viewport dimensions for stretch layout
-  let sized_view = { ...view, style: { ...view.style, width: viewport_w, height: viewport_h } }
+  let sized_view = { ...view, _style: { ...view._style, width: viewport_w, height: viewport_h } }
   let root_node = view_to_node(sized_view)
   let rects = lay.layout(root_node, viewport_w, viewport_h)
   zip_view_rects(view, rects, 0).items
@@ -72,17 +73,18 @@ fn zip_view_rects(view: v.View, rects: List[lay.LayoutRect], idx: Int) -> ZipRes
   if idx >= list.len(rects) then { items: [], index: idx }
   else {
     let r = rects[idx]
-    let s = view.style
+    let s = view._style
     let item = {
       x: r.x, y: r.y, w: r.w, h: r.h,
       bg_r: s.bg.r, bg_g: s.bg.g, bg_b: s.bg.b, bg_a: s.bg.a,
       fg_r: s.fg.r, fg_g: s.fg.g, fg_b: s.fg.b, fg_a: s.fg.a,
       rounded: s.rounded, opacity: s.opacity, font_size: s.font_size,
-      content: view.content, kind: view.kind,
+      selectable: s.selectable,
+      content: view._content, kind: view._kind,
     }
     var items = [item]
     var next_idx = idx + 1
-    for child in view.children {
+    for child in view._children {
       let child_result = zip_view_rects(child, rects, next_idx)
       items = items + child_result.items
       next_idx = child_result.index

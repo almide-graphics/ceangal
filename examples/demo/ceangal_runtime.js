@@ -254,9 +254,17 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
       B(img.vtx), B(img.idx), B(0), B(img.tex), B(img.samp));
   }
 
+  let _firstRender = true;
   function renderAll() {
     animator.stop();
     prepare();
+    if (_firstRender) {
+      ex.todo_init_data?.();
+      // Re-prepare to include initial data
+      prepare();
+      _firstRender = false;
+    }
+    updateViewTextOverlay();
   }
 
   renderAll();
@@ -286,9 +294,11 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
       if (!text) continue;
 
       const fontSize = ex.get_item_font_size ? Number(ex.get_item_font_size(B(i))) : 14;
+      const canSelect = ex.get_item_selectable ? N(ex.get_item_selectable(B(i))) === 1 : true;
       const span = document.createElement("span");
       span.textContent = text;
-      span.style.cssText = `position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;display:flex;align-items:center;font:${fontSize}px sans-serif;color:white;pointer-events:auto;user-select:text;cursor:text;overflow:hidden;`;
+      const pe = canSelect ? "pointer-events:auto;user-select:text;cursor:text;" : "pointer-events:none;user-select:none;";
+      span.style.cssText = `position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;display:flex;align-items:center;font:${fontSize}px sans-serif;color:white;overflow:hidden;${pe}`;
       overlayEl.appendChild(span);
     }
   }
@@ -478,6 +488,20 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   window.addEventListener("mouseup", () => { _interaction = null; });
 
   // ── Todo actions ──
+  function handleTodoClick(e) {
+    if (!ex.handle_click) return;
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const todoId = N(ex.handle_click(mx, my));
+    if (todoId >= 0) {
+      ex.todo_toggle(B(todoId));
+      updateViewTextOverlay();
+    }
+  }
+  canvas.addEventListener("click", handleTodoClick);
+  overlayEl.addEventListener("click", handleTodoClick);
+
   window.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && ex.todo_add) {
       ex.todo_add();

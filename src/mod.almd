@@ -26,6 +26,7 @@ var cached_scene: snaidhm.SceneHandle = {
   img_vtx: 0, img_idx: 0, img_count: 0, format: 0,
 }
 var scene_ready = false
+var app_initialized = false
 var viewport_w = 0.0
 var viewport_h = 0.0
 var root_region = 0
@@ -133,8 +134,6 @@ fn do_prepare(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int,
     img_vtx, img_idx, img_count, img_texture, img_sampler)
   scene_ready = true
 
-  td.add_todo("Buy milk")
-  td.add_todo("Write docs")
   upload_render_items(vw, vh)
 
   // Init virtual list (disabled, using todo app)
@@ -344,7 +343,16 @@ fn get_item_text(i: Int) -> Int = {
 @export(wasm, "get_item_font_size")
 fn get_item_font_size(i: Int) -> Float = cached_items[i].font_size
 
+@export(wasm, "get_item_selectable")
+fn get_item_selectable(i: Int) -> Int = cached_items[i].selectable
+
 // ── Todo actions (called from JS) ──
+
+@export(wasm, "todo_init_data")
+fn todo_init_data() -> Unit = {
+  td.add_todo("Buy milk")
+  td.add_todo("Write docs")
+}
 
 @export(wasm, "todo_add")
 fn todo_add() -> Unit = {
@@ -358,6 +366,26 @@ fn todo_toggle(id: Int) -> Unit = {
   td.toggle_todo(id)
   upload_render_items(viewport_w, viewport_h)
   draw_at_scroll()
+}
+
+// Click handler: simple — check items by position, return todo index or -1
+@export(wasm, "handle_click")
+fn handle_click(click_x: Float, click_y: Float) -> Int = {
+  var result = 0 - 1
+  let todos_list = td.todos.get()
+  var todo_idx = 0
+  for i in 0..list.len(cached_items) {
+    let item = cached_items[i]
+    if item.kind == 2 and item.bg_a > 0.01 then {
+      if click_x >= item.x and click_x < item.x + item.w and
+         click_y >= item.y and click_y < item.y + item.h and
+         todo_idx < list.len(todos_list) then {
+        result = todos_list[todo_idx].id
+      } else ()
+      todo_idx = todo_idx + 1
+    } else ()
+  }
+  result
 }
 
 // ── Legacy ──

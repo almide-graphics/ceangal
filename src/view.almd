@@ -1,141 +1,139 @@
-// Ceangal View — declarative View tree + diff
+// Ceangal View — opaque declarative UI node
 //
-// View = pure data. Framework diffs old/new trees and patches GPU.
-// API: record {} for bulk style, |> pipe for incremental/dynamic.
+// View is opaque. You can only:
+//   1. Create: text(), col(), row()
+//   2. Modify: |> padding() |> bg() |> font() ...
+//   3. Compose: fn my_style(v: View) -> View = v |> bg(blue) |> rounded(12)
+//
+// All modifiers are View -> View. That's the only concept.
 
-// ── Kind ──
+// ── Internal types (not for user access) ──
+
+type Color = { r: Float, g: Float, b: Float, a: Float }
+type Style = {
+  width: Float, height: Float,
+  pt: Float, pr: Float, pb: Float, pl: Float,
+  mt: Float, mr: Float, mb: Float, ml: Float,
+  grow: Float, shrink: Float, gap: Float,
+  justify: Int, align: Int,
+  bg: Color, fg: Color,
+  rounded: Float, opacity: Float, scale: Float,
+  font_size: Float, bold: Int, strikethrough: Int, selectable: Int,
+}
 
 let TEXT = 0
 let BOX = 1
 let ROW = 2
 let COL = 3
 
-// ── Color ──
-
-type Color = { r: Float, g: Float, b: Float, a: Float }
-
-fn rgba(r: Float, g: Float, b: Float, a: Float) -> Color = { r: r, g: g, b: b, a: a }
-fn rgb(r: Float, g: Float, b: Float) -> Color = { r: r, g: g, b: b, a: 1.0 }
-
-let transparent = rgba(0.0, 0.0, 0.0, 0.0)
-let white = rgb(1.0, 1.0, 1.0)
-let black = rgb(0.0, 0.0, 0.0)
-
-// ── Style ──
-
-type Style = {
-  // Layout
-  width: Float, height: Float,
-  pt: Float, pr: Float, pb: Float, pl: Float,
-  mt: Float, mr: Float, mb: Float, ml: Float,
-  grow: Float, shrink: Float, gap: Float,
-  justify: Int, align: Int,
-  // Paint
-  bg: Color, fg: Color,
-  rounded: Float, opacity: Float, scale: Float,
-  font_size: Float, bold: Int, strikethrough: Int,
-}
-
-let default_style: Style = {
+let _transparent = { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }
+let _white = { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }
+let _default: Style = {
   width: -1.0, height: -1.0,
   pt: 0.0, pr: 0.0, pb: 0.0, pl: 0.0,
   mt: 0.0, mr: 0.0, mb: 0.0, ml: 0.0,
   grow: 0.0, shrink: 0.0, gap: 0.0,
   justify: 0, align: 0,
-  bg: transparent, fg: white,
+  bg: _transparent, fg: _white,
   rounded: 0.0, opacity: 1.0, scale: 1.0,
-  font_size: 14.0, bold: 0, strikethrough: 0,
+  font_size: 14.0, bold: 0, strikethrough: 0, selectable: 1,
 }
-
-// ── View ──
 
 type View = {
-  kind: Int,
-  children: List[View],
-  content: String,
-  style: Style,
-  on_click: Int,
-  key: Int,
+  _kind: Int,
+  _children: List[View],
+  _content: String,
+  _style: Style,
+  _on_click: Int,
+  _key: Int,
 }
+
+// ── Colors (public) ──
+
+fn rgba(r: Float, g: Float, b: Float, a: Float) -> Color = { r: r, g: g, b: b, a: a }
+fn rgb(r: Float, g: Float, b: Float) -> Color = { r: r, g: g, b: b, a: 1.0 }
+
+let transparent = _transparent
+let white = _white
+let black = rgb(0.0, 0.0, 0.0)
 
 // ── Constructors ──
 
 fn text(content: String) -> View =
-  { kind: TEXT, children: [], content: content, style: default_style, on_click: 0, key: 0 }
-
-fn box(children: List[View]) -> View =
-  { kind: BOX, children: children, content: "", style: default_style, on_click: 0, key: 0 }
-
-fn row(children: List[View]) -> View =
-  { kind: ROW, children: children, content: "", style: default_style, on_click: 0, key: 0 }
+  { _kind: TEXT, _children: [], _content: content, _style: _default, _on_click: 0, _key: 0 }
 
 fn col(children: List[View]) -> View =
-  { kind: COL, children: children, content: "", style: default_style, on_click: 0, key: 0 }
+  { _kind: COL, _children: children, _content: "", _style: _default, _on_click: 0, _key: 0 }
 
-// ── Pipe: Layout ──
+fn row(children: List[View]) -> View =
+  { _kind: ROW, _children: children, _content: "", _style: _default, _on_click: 0, _key: 0 }
+
+// ── Layout modifiers ──
 
 fn padding(v: View, all: Float) -> View =
-  { ...v, style: { ...v.style, pt: all, pr: all, pb: all, pl: all } }
+  { ...v, _style: { ...v._style, pt: all, pr: all, pb: all, pl: all } }
 
 fn px(v: View, h: Float) -> View =
-  { ...v, style: { ...v.style, pr: h, pl: h } }
+  { ...v, _style: { ...v._style, pr: h, pl: h } }
 
 fn py(v: View, vertical: Float) -> View =
-  { ...v, style: { ...v.style, pt: vertical, pb: vertical } }
+  { ...v, _style: { ...v._style, pt: vertical, pb: vertical } }
 
 fn gap(v: View, g: Float) -> View =
-  { ...v, style: { ...v.style, gap: g } }
+  { ...v, _style: { ...v._style, gap: g } }
 
 fn grow(v: View, g: Float) -> View =
-  { ...v, style: { ...v.style, grow: g } }
+  { ...v, _style: { ...v._style, grow: g } }
 
 fn shrink(v: View, s: Float) -> View =
-  { ...v, style: { ...v.style, shrink: s } }
+  { ...v, _style: { ...v._style, shrink: s } }
 
 fn w(v: View, width: Float) -> View =
-  { ...v, style: { ...v.style, width: width } }
+  { ...v, _style: { ...v._style, width: width } }
 
 fn h(v: View, height: Float) -> View =
-  { ...v, style: { ...v.style, height: height } }
+  { ...v, _style: { ...v._style, height: height } }
 
-// ── Pipe: Paint ──
+// ── Paint modifiers ──
 
 fn bg(v: View, c: Color) -> View =
-  { ...v, style: { ...v.style, bg: c } }
+  { ...v, _style: { ...v._style, bg: c } }
 
 fn color(v: View, c: Color) -> View =
-  { ...v, style: { ...v.style, fg: c } }
+  { ...v, _style: { ...v._style, fg: c } }
 
 fn rounded(v: View, r: Float) -> View =
-  { ...v, style: { ...v.style, rounded: r } }
+  { ...v, _style: { ...v._style, rounded: r } }
 
 fn opacity(v: View, o: Float) -> View =
-  { ...v, style: { ...v.style, opacity: o } }
-
-fn scale(v: View, s: Float) -> View =
-  { ...v, style: { ...v.style, scale: s } }
+  { ...v, _style: { ...v._style, opacity: o } }
 
 fn font(v: View, size: Float) -> View =
-  { ...v, style: { ...v.style, font_size: size } }
+  { ...v, _style: { ...v._style, font_size: size } }
 
 fn bold(v: View) -> View =
-  { ...v, style: { ...v.style, bold: 1 } }
+  { ...v, _style: { ...v._style, bold: 1 } }
 
 fn strikethrough(v: View, on: Bool) -> View =
-  { ...v, style: { ...v.style, strikethrough: if on then 1 else 0 } }
+  { ...v, _style: { ...v._style, strikethrough: if on then 1 else 0 } }
 
-// ── Diff ──
+// ── Interaction modifiers ──
+
+fn selectable(v: View, on: Bool) -> View =
+  { ...v, _style: { ...v._style, selectable: if on then 1 else 0 } }
+
+// ── Diff (framework internal) ──
 
 let PATCH_NONE = 0
 let PATCH_REPAINT = 1
 let PATCH_RELAYOUT = 2
 let PATCH_REPLACE = 3
 
-fn diff_node(old: View, new: View) -> Int = {
-  if old.kind != new.kind then PATCH_REPLACE
-  else if old.content != new.content then PATCH_RELAYOUT
-  else if layout_changed(old.style, new.style) then PATCH_RELAYOUT
-  else if paint_changed(old.style, new.style) then PATCH_REPAINT
+fn diff_node(old: View, cur: View) -> Int = {
+  if old._kind != cur._kind then PATCH_REPLACE
+  else if old._content != cur._content then PATCH_RELAYOUT
+  else if layout_changed(old._style, cur._style) then PATCH_RELAYOUT
+  else if paint_changed(old._style, cur._style) then PATCH_REPAINT
   else PATCH_NONE
 }
 
@@ -149,30 +147,29 @@ fn layout_changed(a: Style, b: Style) -> Bool =
 fn paint_changed(a: Style, b: Style) -> Bool =
   a.bg != b.bg or a.fg != b.fg or
   a.rounded != b.rounded or a.opacity != b.opacity or a.scale != b.scale or
-  a.font_size != b.font_size or a.bold != b.bold or a.strikethrough != b.strikethrough
-
-// ── Recursive diff ──
+  a.font_size != b.font_size or a.bold != b.bold or
+  a.strikethrough != b.strikethrough or a.selectable != b.selectable
 
 type DiffResult = { relayouts: Int, repaints: Int, replaces: Int }
 
-fn diff_tree(old: View, new: View) -> DiffResult = {
-  let patch = diff_node(old, new)
+fn diff_tree(old: View, cur: View) -> DiffResult = {
+  let patch = diff_node(old, cur)
   if patch == PATCH_REPLACE then { relayouts: 0, repaints: 0, replaces: 1 }
   else {
     var rl = if patch == PATCH_RELAYOUT then 1 else 0
     var rp = if patch == PATCH_REPAINT then 1 else 0
     var re = 0
-    let old_len = list.len(old.children)
-    let new_len = list.len(new.children)
-    let min_len = int.min(old_len, new_len)
+    let old_len = list.len(old._children)
+    let cur_len = list.len(cur._children)
+    let min_len = int.min(old_len, cur_len)
     for i in 0..min_len {
-      let child_diff = diff_tree(old.children[i], new.children[i])
+      let child_diff = diff_tree(old._children[i], cur._children[i])
       rl = rl + child_diff.relayouts
       rp = rp + child_diff.repaints
       re = re + child_diff.replaces
     }
-    if new_len > old_len then { re = re + new_len - old_len } else ()
-    if old_len > new_len then { re = re + old_len - new_len } else ()
+    if cur_len > old_len then { re = re + cur_len - old_len } else ()
+    if old_len > cur_len then { re = re + old_len - cur_len } else ()
     { relayouts: rl, repaints: rp, replaces: re }
   }
 }
