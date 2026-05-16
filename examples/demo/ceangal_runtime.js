@@ -487,6 +487,14 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
 
   window.addEventListener("mouseup", () => { _interaction = null; });
 
+  // ── Hover ──
+  function onHover(e) {
+    if (!ex.set_hover) return;
+    const rect = canvas.getBoundingClientRect();
+    ex.set_hover(e.clientX - rect.left, e.clientY - rect.top);
+  }
+  container.addEventListener("mousemove", onHover);
+
   // ── Todo actions ──
   function handleTodoClick(e) {
     if (!ex.handle_click) return;

@@ -348,6 +348,56 @@ fn get_item_selectable(i: Int) -> Int = cached_items[i].selectable
 
 // ── Todo actions (called from JS) ──
 
+var hover_idx = 0 - 1
+
+@export(wasm, "set_hover")
+fn set_hover(mouse_x: Float, mouse_y: Float) -> Unit = {
+  var found = 0 - 1
+  for i in 0..list.len(cached_items) {
+    let item = cached_items[i]
+    if item.bg_a > 0.01 and item.kind != 0 and
+       mouse_x >= item.x and mouse_x < item.x + item.w and
+       mouse_y >= item.y and mouse_y < item.y + item.h then {
+      found = i
+    } else ()
+  }
+  if found != hover_idx then {
+    hover_idx = found
+    upload_with_hover()
+    draw_at_scroll()
+  } else ()
+}
+
+fn upload_with_hover() -> Unit = {
+  let count = list.len(cached_items)
+  let s = dpr()
+  var xs: List[Float] = []
+  var ys: List[Float] = []
+  var ws: List[Float] = []
+  var hs: List[Float] = []
+  var brs: List[Float] = []
+  var bgs: List[Float] = []
+  var bbs: List[Float] = []
+  var bas: List[Float] = []
+  var rds: List[Float] = []
+  var ops: List[Float] = []
+  for i in 0..count {
+    let item = cached_items[i]
+    let h = i == hover_idx
+    xs = xs + [item.x * s]
+    ys = ys + [item.y * s]
+    ws = ws + [item.w * s]
+    hs = hs + [item.h * s]
+    brs = brs + [if h then float.min(1.0, item.bg_r + 0.08) else item.bg_r]
+    bgs = bgs + [if h then float.min(1.0, item.bg_g + 0.08) else item.bg_g]
+    bbs = bbs + [if h then float.min(1.0, item.bg_b + 0.08) else item.bg_b]
+    bas = bas + [item.bg_a]
+    rds = rds + [item.rounded * s]
+    ops = ops + [item.opacity]
+  }
+  snaidhm.upload_items(cached_scene, count, xs, ys, ws, hs, brs, bgs, bbs, bas, rds, ops)
+}
+
 @export(wasm, "todo_init_data")
 fn todo_init_data() -> Unit = {
   td.add_todo("Buy milk")
