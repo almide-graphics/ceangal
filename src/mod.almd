@@ -49,6 +49,7 @@ var rgn_box: List[Float] = list.repeat(0.0, 8)
 fn upload_render_items(vw: Float, vh: Float) -> Unit = {
   let view = td.app()
   let items = render.render(view, vw, vh)
+  cached_items = items
   let count = list.len(items)
   let s = dpr()
   var xs: List[Float] = []
@@ -311,6 +312,39 @@ fn scroll_key(key: Int) -> Unit = {
   }
   else ()
   draw_at_scroll()
+}
+
+// ── Render items query (for JS DOM text overlay) ──
+
+var cached_items: List[render.RenderItem] = []
+
+@export(wasm, "get_item_count")
+fn get_item_count() -> Int = list.len(cached_items)
+
+@export(wasm, "get_item_x")
+fn get_item_x(i: Int) -> Float = cached_items[i].x
+
+@export(wasm, "get_item_y")
+fn get_item_y(i: Int) -> Float = cached_items[i].y
+
+@export(wasm, "get_item_w")
+fn get_item_w(i: Int) -> Float = cached_items[i].w
+
+@export(wasm, "get_item_h")
+fn get_item_h(i: Int) -> Float = cached_items[i].h
+
+@export(wasm, "get_item_kind")
+fn get_item_kind(i: Int) -> Int = cached_items[i].kind
+
+@export(wasm, "get_item_text")
+fn get_item_text(i: Int) -> Int = {
+  s(cached_items[i].content)
+}
+
+@export(wasm, "get_item_font_size")
+fn get_item_font_size(i: Int) -> Float = {
+  // Read from the original View tree's style
+  14.0  // default for now
 }
 
 // ── Todo actions (called from JS) ──

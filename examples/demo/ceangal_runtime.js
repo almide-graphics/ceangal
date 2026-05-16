@@ -265,11 +265,34 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   const VLIST_ITEM_H = 0;
   const VLIST_COUNT = 0;
 
-  // View tree DOM text overlay — render text from WASM exports
+  // View tree DOM text overlay
   function updateViewTextOverlay() {
-    // TODO: read RenderItem text from WASM and create DOM spans
-    // For now, handled by GPU rects only
+    if (!ex.get_item_count) return;
+    // Clear old overlay
+    while (overlayEl.firstChild) overlayEl.removeChild(overlayEl.firstChild);
+
+    const count = N(ex.get_item_count());
+    for (let i = 0; i < count; i++) {
+      const kind = N(ex.get_item_kind(B(i)));
+      if (kind !== 0) continue; // only TEXT nodes (kind=0)
+
+      const x = Number(ex.get_item_x(B(i)));
+      const y = Number(ex.get_item_y(B(i)));
+      const w = Number(ex.get_item_w(B(i)));
+      const h = Number(ex.get_item_h(B(i)));
+      const textId = N(ex.get_item_text(B(i)));
+      const text = strings[textId] || "";
+
+      if (!text) continue;
+
+      const span = document.createElement("span");
+      span.textContent = text;
+      span.style.cssText = `position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;display:flex;align-items:center;font:14px sans-serif;color:white;pointer-events:none;user-select:text;overflow:hidden;`;
+      overlayEl.appendChild(span);
+    }
   }
+
+  updateViewTextOverlay();
   const domPool = []; // recycled <div> elements
   let domVisible = new Map(); // index → element
 
@@ -457,6 +480,7 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   window.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && ex.todo_add) {
       ex.todo_add();
+      updateViewTextOverlay();
     }
   });
 

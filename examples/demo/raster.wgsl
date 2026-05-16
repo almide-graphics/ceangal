@@ -206,7 +206,7 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
       let ix = pos.x; let iy = pos.y;
       let iw = pos.z; let ih = pos.w;
 
-      if iw < 1.0 || ih < 1.0 { continue; }
+      if iw < 1.0 || ih < 1.0 || col.w < 0.01 { continue; }
 
       let corner_r = item_meta.x;
       let local = vec2<f32>(f32(px) - ix - iw * 0.5, f32(py) - iy - ih * 0.5);

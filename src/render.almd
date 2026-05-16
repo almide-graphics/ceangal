@@ -23,7 +23,16 @@ type RenderItem = {
 
 fn view_to_node(view: v.View) -> lay.Node = {
   let s = view.style
-  let base = if view.kind == v.ROW then lay.row(view.children |> list.map(view_to_node))
+  // TEXT: estimate size from content + font_size
+  let base = if view.kind == v.TEXT then {
+               let char_w = s.font_size * 0.6
+               let text_w = int.to_float(string.len(view.content)) * char_w
+               let text_h = s.font_size * 1.4
+               let w = if s.width > 0.0 then s.width else text_w
+               let h = if s.height > 0.0 then s.height else text_h
+               lay.leaf(w, h)
+             }
+             else if view.kind == v.ROW then lay.row(view.children |> list.map(view_to_node))
              else if view.kind == v.COL then lay.col(view.children |> list.map(view_to_node))
              else if view.kind == v.BOX then lay.col(view.children |> list.map(view_to_node))
              else lay.leaf(s.width, s.height)
