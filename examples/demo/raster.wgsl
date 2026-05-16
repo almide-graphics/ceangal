@@ -74,6 +74,11 @@ fn evaluate_paint(paint: Paint, p: vec2<f32>) -> vec4<f32> {
 @group(0) @binding(6) var<storage, read>       paints: array<Paint>;
 @group(0) @binding(7) var<storage, read>       tile_cmds: array<u32>;
 @group(1) @binding(0) var<storage, read>       scroll_regions: array<vec4<f32>>;
+@group(1) @binding(1) var<storage, read>       render_items: array<vec4<f32>>;
+// Item layout: 3 vec4s per item (48 bytes)
+//   [i*3+0] = (x, y, w, h) in physical px
+//   [i*3+1] = (bg_r, bg_g, bg_b, bg_a)
+//   [i*3+2] = (rounded, opacity, 0, item_count)
 // Region layout in scroll_regions: 3 vec4s per region (48 bytes)
 //   [i*3+0] = bounds (x, y, w, h) in physical px
 //   [i*3+1] = (scroll_x, scroll_y, content_w, content_h)
@@ -185,6 +190,36 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
 
   if content_px < 0.0 || content_py < 0.0 {
     pixels[py * params.width + px] = pack_color(0.08, 0.08, 0.10, 1.0);
+    return;
+  }
+
+  // ── Render items: View tree rects from storage buffer ──
+  let ri_count = u32(render_items[2].w);  // item_count from first item's slot
+  if ri_count > 0u {
+    var bg = vec3<f32>(0.08, 0.08, 0.10);
+    // Iterate items front-to-back, blend
+    for (var ri = 0u; ri < min(ri_count, 256u); ri++) {
+      let pos = render_items[ri * 3u];       // x, y, w, h
+      let col = render_items[ri * 3u + 1u];  // bg_r, bg_g, bg_b, bg_a
+      let item_meta = render_items[ri * 3u + 2u]; // rounded, opacity, 0, count
+
+      let ix = pos.x; let iy = pos.y;
+      let iw = pos.z; let ih = pos.w;
+
+      if iw < 1.0 || ih < 1.0 { continue; }
+
+      let corner_r = item_meta.x;
+      let local = vec2<f32>(f32(px) - ix - iw * 0.5, f32(py) - iy - ih * 0.5);
+      let half = vec2<f32>(iw * 0.5, ih * 0.5);
+      let d = sd_rounded_box(local, half, corner_r);
+
+      if d < 1.0 && col.w > 0.01 {
+        let aa = 1.0 - smoothstep(-1.0, 0.5, d);
+        let a = aa * col.w * item_meta.y; // alpha * opacity
+        bg = mix(bg, col.xyz, a);
+      }
+    }
+    pixels[py * params.width + px] = pack_color(bg.x, bg.y, bg.z, 1.0);
     return;
   }
 

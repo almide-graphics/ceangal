@@ -197,7 +197,9 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   if (!navigator.gpu) throw new Error("WebGPU not supported");
 
   const adapter = await navigator.gpu.requestAdapter();
-  _device = await adapter.requestDevice();
+  _device = await adapter.requestDevice({
+    requiredLimits: { maxStorageBuffersPerShaderStage: 10 },
+  });
   _format = navigator.gpu.getPreferredCanvasFormat();
 
   const [rasterCode, textCode, imageCode, fontBuffer] = await Promise.all([
@@ -260,8 +262,14 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   renderAll();
 
   // ── Virtual list DOM overlay ──
-  const VLIST_ITEM_H = 50; // CSS px, must match Almide VLIST_ITEM_H
-  const VLIST_COUNT = 1000;
+  const VLIST_ITEM_H = 0;
+  const VLIST_COUNT = 0;
+
+  // View tree DOM text overlay — render text from WASM exports
+  function updateViewTextOverlay() {
+    // TODO: read RenderItem text from WASM and create DOM spans
+    // For now, handled by GPU rects only
+  }
   const domPool = []; // recycled <div> elements
   let domVisible = new Map(); // index → element
 
@@ -444,6 +452,13 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   });
 
   window.addEventListener("mouseup", () => { _interaction = null; });
+
+  // ── Todo actions ──
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && ex.todo_add) {
+      ex.todo_add();
+    }
+  });
 
   // ── Keyboard scroll ──
   canvas.tabIndex = 0;

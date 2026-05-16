@@ -7,6 +7,9 @@ import self.dom as dom
 import self.layout as layout
 import self.scroll as sc
 import self.virtual_list as vlist
+import self.todoapp as td
+import self.render as render
+import self.cell as cl
 import snaidhm
 import snaidhm.web.gpu as gpu
 import snaidhm.ttf as ttf
@@ -16,6 +19,7 @@ import snaidhm.ttf as ttf
 var cached_scene: snaidhm.SceneHandle = {
   device: 0, width: 0, height: 0, viewport_tiles_x: 0, viewport_tiles_y: 0,
   params_buf: 0, regions_buf: 0, pixel_buf: 0,
+  items_buf: 0,
   compute_pipeline: 0, compute_bg: 0, compute_regions_bg: 0,
   quad_pipeline: 0, quad_bg: 0, quad_regions_bg: 0,
   img_pipeline: 0, img_bg: 0,
@@ -39,6 +43,38 @@ var rgn_ch: List[Float] = list.repeat(0.0, 8)
 var rgn_pa: List[Int] = list.repeat(0 - 1, 8)
 var rgn_boy: List[Float] = list.repeat(0.0, 8)
 var rgn_box: List[Float] = list.repeat(0.0, 8)
+
+// ── Render items upload ──
+
+fn upload_render_items(vw: Float, vh: Float) -> Unit = {
+  let view = td.app()
+  let items = render.render(view, vw, vh)
+  let count = list.len(items)
+  let s = dpr()
+  var xs: List[Float] = []
+  var ys: List[Float] = []
+  var ws: List[Float] = []
+  var hs: List[Float] = []
+  var bg_rs: List[Float] = []
+  var bg_gs: List[Float] = []
+  var bg_bs: List[Float] = []
+  var bg_as: List[Float] = []
+  var roundeds: List[Float] = []
+  var opacities: List[Float] = []
+  for item in items {
+    xs = xs + [item.x * s]
+    ys = ys + [item.y * s]
+    ws = ws + [item.w * s]
+    hs = hs + [item.h * s]
+    bg_rs = bg_rs + [item.bg_r]
+    bg_gs = bg_gs + [item.bg_g]
+    bg_bs = bg_bs + [item.bg_b]
+    bg_as = bg_as + [item.bg_a]
+    roundeds = roundeds + [item.rounded * s]
+    opacities = opacities + [item.opacity]
+  }
+  snaidhm.upload_items(cached_scene, count, xs, ys, ws, hs, bg_rs, bg_gs, bg_bs, bg_as, roundeds, opacities)
+}
 
 // ── Drawing ──
 
@@ -67,8 +103,8 @@ fn draw_at_scroll() -> Unit = {
     snaidhm.upload_regions(cached_scene, sc.region_count, rgn_bx, rgn_by, rgn_bw, rgn_bh, rgn_sx, rgn_sy, rgn_cw, rgn_ch, rgn_pa, rgn_boy, rgn_box)
 
     // Write virtual list params to GPU (item_height in physical px, item_count)
-    gpu.write_f32_at(cached_scene.device, cached_scene.params_buf, 56, vlist.get_item_height() * s)
-    gpu.write_f32_at(cached_scene.device, cached_scene.params_buf, 60, int.to_float(vlist.get_item_count()))
+    gpu.write_f32_at(cached_scene.device, cached_scene.params_buf, 56, 0.0)
+    gpu.write_f32_at(cached_scene.device, cached_scene.params_buf, 60, 0.0)
 
     snaidhm.draw_frame_2d(cached_scene,
       sc.ax_pos[rx] * s, sc.ax_pos[ry] * s,
@@ -96,8 +132,12 @@ fn do_prepare(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int,
     img_vtx, img_idx, img_count, img_texture, img_sampler)
   scene_ready = true
 
-  // Init virtual list
-  vlist.init(VLIST_COUNT, VLIST_ITEM_H, vw, vh)
+  td.add_todo("Buy milk")
+  td.add_todo("Write docs")
+  upload_render_items(vw, vh)
+
+  // Init virtual list (disabled, using todo app)
+  vlist.init(0, 0.0, vw, vh)
 
   // Scroll setup
   sc.reset_all()
@@ -270,6 +310,22 @@ fn scroll_key(key: Int) -> Unit = {
     sc.set_scrollbar_frac(sc.ax(r, sc.AXIS_Y), 1.0, sc.rgn_content_h[r], viewport_h)
   }
   else ()
+  draw_at_scroll()
+}
+
+// ── Todo actions (called from JS) ──
+
+@export(wasm, "todo_add")
+fn todo_add() -> Unit = {
+  td.add_todo("New item")
+  upload_render_items(viewport_w, viewport_h)
+  draw_at_scroll()
+}
+
+@export(wasm, "todo_toggle")
+fn todo_toggle(id: Int) -> Unit = {
+  td.toggle_todo(id)
+  upload_render_items(viewport_w, viewport_h)
   draw_at_scroll()
 }
 
