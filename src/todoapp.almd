@@ -1,0 +1,120 @@
+// Todo App — Ceangal opaque View API demo
+
+import self.cell as cl
+import self.view as v
+import self.theme as t
+
+type Todo = { id: Int, title: String, done: Bool }
+
+// ── State ──
+
+var todos: cl.Cell[List[Todo]] = cl.cell([]: List[Todo])
+var next_id: cl.Cell[Int] = cl.cell(0)
+
+// ── Actions ──
+
+fn add_todo(title: String) -> Unit = {
+  let id = next_id.get()
+  next_id = next_id.update((n) => n + 1)
+  todos = todos.update((ls) => ls + [{ id: id, title: title, done: false }])
+}
+
+fn toggle_todo(id: Int) -> Unit = {
+  todos = todos.update((ls) => ls |> list.map((t) =>
+    if t.id == id then { id: t.id, title: t.title, done: not t.done } else t
+  ))
+}
+
+fn remove_todo(id: Int) -> Unit = {
+  todos = todos.update((ls) => ls |> list.filter((t) => t.id != id))
+}
+
+fn active_count() -> Int =
+  todos.get() |> list.filter((t) => not t.done) |> list.len
+
+
+// ── Style groups using theme tokens ──
+
+fn todo_card(view: v.View) -> v.View =
+  view |> t.card
+
+// ── Views ──
+
+fn todo_item(item: Todo) -> v.View =
+  v.row([
+    v.text(if item.done then "[x] " + item.title else "[ ] " + item.title)
+      |> v.grow(1.0)
+      |> t.text_base
+      |> v.color(if item.done then t.gray_400 else v.white),
+  ])
+  |> todo_card
+
+fn app() -> v.View =
+  v.col([
+    v.text("Todos (" + int.to_string(active_count()) + ")")
+      |> t.heading,
+    v.col(todos.get() |> list.map(todo_item))
+      |> v.gap(t.sp_2),
+    v.text("+ Add (Enter)")
+      |> t.button_primary,
+  ])
+  |> v.gap(t.sp_4) |> v.padding(t.sp_6)
+
+// ── Framework ──
+
+var prev_tree: v.View = v.text("")
+
+fn init() -> v.DiffResult = {
+  prev_tree = app()
+  { relayouts: 0, repaints: 0, replaces: 0 }
+}
+
+fn rebuild() -> v.DiffResult = {
+  let new_tree = app()
+  let result = v.diff_tree(prev_tree, new_tree)
+  prev_tree = new_tree
+  cl.clear_dirty()
+  result
+}
+
+// ── Tests ──
+
+test "add triggers dirty" {
+  todos = cl.cell([]: List[Todo])
+  next_id = cl.cell(0)
+  init()
+  add_todo("Buy milk")
+  assert(cl.is_dirty())
+}
+
+test "rebuild detects change" {
+  todos = cl.cell([]: List[Todo])
+  next_id = cl.cell(0)
+  init()
+  add_todo("Buy milk")
+  let r = rebuild()
+  assert(r.relayouts + r.repaints + r.replaces > 0)
+}
+
+test "no mutation no diff" {
+  todos = cl.cell([]: List[Todo])
+  next_id = cl.cell(0)
+  init()
+  add_todo("A")
+  rebuild()
+  cl.clear_dirty()
+  let r = rebuild()
+  assert(r.relayouts == 0)
+  assert(r.repaints == 0)
+  assert(r.replaces == 0)
+}
+
+test "active count" {
+  todos = cl.cell([]: List[Todo])
+  next_id = cl.cell(0)
+  add_todo("A")
+  add_todo("B")
+  assert(active_count() == 2)
+  toggle_todo(0)
+  assert(active_count() == 1)
+}

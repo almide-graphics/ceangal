@@ -1,0 +1,169 @@
+// Ceangal Theme — GPU-native design tokens
+//
+// Standard palette + GPU effects that CSS can't do.
+// All values are typed (Color, Float). No strings, no CSS.
+
+import self.view as v
+
+// ══════════════════════════════════════════
+// Colors — Tailwind-inspired, 11 shades per hue
+// ══════════════════════════════════════════
+
+// Gray (neutral)
+let gray_50  = v.rgb(0.98, 0.98, 0.98)
+let gray_100 = v.rgb(0.96, 0.96, 0.96)
+let gray_200 = v.rgb(0.90, 0.90, 0.92)
+let gray_300 = v.rgb(0.82, 0.82, 0.85)
+let gray_400 = v.rgb(0.64, 0.64, 0.68)
+let gray_500 = v.rgb(0.46, 0.46, 0.50)
+let gray_600 = v.rgb(0.34, 0.34, 0.38)
+let gray_700 = v.rgb(0.25, 0.25, 0.30)
+let gray_800 = v.rgb(0.18, 0.18, 0.22)
+let gray_900 = v.rgb(0.12, 0.12, 0.16)
+let gray_950 = v.rgb(0.06, 0.06, 0.09)
+
+// Blue
+let blue_50  = v.rgb(0.94, 0.96, 1.00)
+let blue_100 = v.rgb(0.86, 0.91, 1.00)
+let blue_200 = v.rgb(0.74, 0.83, 0.98)
+let blue_300 = v.rgb(0.58, 0.72, 0.96)
+let blue_400 = v.rgb(0.42, 0.60, 0.94)
+let blue_500 = v.rgb(0.35, 0.55, 0.95)
+let blue_600 = v.rgb(0.28, 0.47, 0.88)
+let blue_700 = v.rgb(0.22, 0.38, 0.78)
+let blue_800 = v.rgb(0.18, 0.30, 0.62)
+let blue_900 = v.rgb(0.14, 0.24, 0.48)
+
+// Red
+let red_400  = v.rgb(0.95, 0.40, 0.40)
+let red_500  = v.rgb(0.90, 0.30, 0.30)
+let red_600  = v.rgb(0.78, 0.22, 0.22)
+
+// Green
+let green_400 = v.rgb(0.30, 0.82, 0.42)
+let green_500 = v.rgb(0.22, 0.72, 0.34)
+let green_600 = v.rgb(0.16, 0.60, 0.26)
+
+// Purple
+let purple_400 = v.rgb(0.68, 0.42, 0.96)
+let purple_500 = v.rgb(0.58, 0.32, 0.92)
+
+// Cyan
+let cyan_400 = v.rgb(0.22, 0.82, 0.88)
+let cyan_500 = v.rgb(0.16, 0.72, 0.78)
+
+// Pink
+let pink_400 = v.rgb(0.95, 0.40, 0.65)
+let pink_500 = v.rgb(0.88, 0.28, 0.55)
+
+// Orange
+let orange_400 = v.rgb(0.96, 0.62, 0.22)
+let orange_500 = v.rgb(0.92, 0.52, 0.14)
+
+// Yellow
+let yellow_400 = v.rgb(0.98, 0.84, 0.22)
+let yellow_500 = v.rgb(0.95, 0.76, 0.12)
+
+// ══════════════════════════════════════════
+// Typography
+// ══════════════════════════════════════════
+
+fn text_xs(view: v.View) -> v.View = view |> v.font(12.0)
+fn text_sm(view: v.View) -> v.View = view |> v.font(14.0)
+fn text_base(view: v.View) -> v.View = view |> v.font(16.0)
+fn text_lg(view: v.View) -> v.View = view |> v.font(18.0)
+fn text_xl(view: v.View) -> v.View = view |> v.font(20.0)
+fn text_2xl(view: v.View) -> v.View = view |> v.font(24.0)
+fn text_3xl(view: v.View) -> v.View = view |> v.font(30.0)
+fn text_4xl(view: v.View) -> v.View = view |> v.font(36.0)
+
+// ══════════════════════════════════════════
+// Spacing scale (px)
+// ══════════════════════════════════════════
+
+let sp_0  = 0.0
+let sp_1  = 4.0
+let sp_2  = 8.0
+let sp_3  = 12.0
+let sp_4  = 16.0
+let sp_5  = 20.0
+let sp_6  = 24.0
+let sp_8  = 32.0
+let sp_10 = 40.0
+let sp_12 = 48.0
+let sp_16 = 64.0
+
+// ══════════════════════════════════════════
+// Border radius
+// ══════════════════════════════════════════
+
+let rounded_none = 0.0
+let rounded_sm   = 4.0
+let rounded_md   = 8.0
+let rounded_lg   = 12.0
+let rounded_xl   = 16.0
+let rounded_2xl  = 24.0
+let rounded_full = 9999.0
+
+// ══════════════════════════════════════════
+// Standard style groups
+// ══════════════════════════════════════════
+
+fn card(view: v.View) -> v.View =
+  view |> v.padding(sp_4) |> v.rounded(rounded_lg) |> v.bg(gray_800)
+
+fn card_elevated(view: v.View) -> v.View =
+  view |> v.padding(sp_4) |> v.rounded(rounded_lg) |> v.bg(gray_800)
+
+fn pill(view: v.View) -> v.View =
+  view |> v.px(sp_4) |> v.py(sp_2) |> v.rounded(rounded_full)
+
+fn button_primary(view: v.View) -> v.View =
+  view |> v.padding(sp_4) |> v.rounded(rounded_lg)
+       |> v.bg(blue_500) |> v.color(v.white)
+       |> text_base |> v.selectable(false)
+
+fn button_danger(view: v.View) -> v.View =
+  view |> v.padding(sp_4) |> v.rounded(rounded_lg)
+       |> v.bg(red_500) |> v.color(v.white)
+       |> text_base |> v.selectable(false)
+
+fn button_ghost(view: v.View) -> v.View =
+  view |> v.padding(sp_4) |> v.rounded(rounded_lg)
+       |> v.color(gray_300)
+       |> text_base |> v.selectable(false)
+
+fn heading(view: v.View) -> v.View =
+  view |> text_2xl |> v.color(v.white) |> v.bold()
+
+fn subheading(view: v.View) -> v.View =
+  view |> text_lg |> v.color(gray_300)
+
+fn caption(view: v.View) -> v.View =
+  view |> text_xs |> v.color(gray_500)
+
+fn label(view: v.View) -> v.View =
+  view |> text_sm |> v.color(gray_400)
+
+// ══════════════════════════════════════════
+// GPU-native effects (CSS can't do these)
+// ══════════════════════════════════════════
+
+// Note: these store effect params in View style.
+// WGSL renders them per-pixel in the fine pass.
+// Implementation requires extending Style + WGSL — staged for next iteration.
+
+// Glow: SDF distance 外側に color を滲ませる
+// fn glow(view: v.View, c: v.Color, radius: Float) -> v.View
+
+// Glass: background blur + tint overlay
+// fn glass(view: v.View, blur_radius: Float, tint: v.Color) -> v.View
+
+// Noise: subtle grain texture for depth
+// fn noise(view: v.View, amount: Float) -> v.View
+
+// Mesh gradient: 4 corner colors interpolated per-pixel
+// fn mesh_bg(view: v.View, tl: v.Color, tr: v.Color, bl: v.Color, br: v.Color) -> v.View
+
+// Animated gradient: hue rotation over time
+// fn animated_gradient(view: v.View, c0: v.Color, c1: v.Color, speed: Float) -> v.View
