@@ -347,7 +347,9 @@ fn fs_fullscreen(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
   let px_y = uv.y * h;
 
   // ── Vertical scrollbar (Cupertino-style: thin → thick on hover) ──
-  let content_h = f32(render_params.content_tiles_y * TILE_SIZE);
+  let content_h = select(f32(render_params.content_tiles_y * TILE_SIZE),
+                         render_params.vlist_item_h * render_params.vlist_item_count,
+                         render_params.vlist_item_h > 0.5);
   if content_h > h && render_params.scrollbar_opacity_y > 0.01 {
     let bar_w = mix(6.0, 10.0, render_params.scrollbar_hover_y);
     let margin = mix(3.0, 4.0, render_params.scrollbar_hover_y);

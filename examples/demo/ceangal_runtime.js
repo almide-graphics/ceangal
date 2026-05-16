@@ -259,10 +259,68 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
 
   renderAll();
 
+  // ── Virtual list DOM overlay ──
+  const VLIST_ITEM_H = 50; // CSS px, must match Almide VLIST_ITEM_H
+  const VLIST_COUNT = 1000;
+  const domPool = []; // recycled <div> elements
+  let domVisible = new Map(); // index → element
+
+  function updateVListDOM() {
+    if (!ex.scroll_tick) return; // no scroll engine
+    const scrollY = ex.get_scroll_pos ? Number(ex.get_scroll_pos(B(0), B(0))) : 0;
+    const ch = container.clientHeight;
+    const visTop = -scrollY;
+    const visBot = visTop + ch;
+    const startIdx = Math.max(0, Math.floor(visTop / VLIST_ITEM_H));
+    const endIdx = Math.min(VLIST_COUNT, Math.ceil(visBot / VLIST_ITEM_H));
+
+    // Remove out-of-view items
+    for (const [idx, el] of domVisible) {
+      if (idx < startIdx || idx >= endIdx) {
+        el.style.display = "none";
+        domPool.push(el);
+        domVisible.delete(idx);
+      }
+    }
+
+    // Add in-view items
+    for (let i = startIdx; i < endIdx; i++) {
+      if (domVisible.has(i)) {
+        // Update position
+        const el = domVisible.get(i);
+        el.style.top = (i * VLIST_ITEM_H + scrollY + 15) + "px";
+      } else {
+        // Get or create element
+        let el = domPool.pop();
+        if (!el) {
+          el = document.createElement("div");
+          el.style.cssText = "position:absolute;left:5%;pointer-events:none;font:14px sans-serif;color:rgba(255,255,255,0.85);line-height:" + VLIST_ITEM_H + "px;white-space:nowrap;user-select:text;";
+          overlayEl.appendChild(el);
+        }
+        el.textContent = "Item " + i;
+        el.style.top = (i * VLIST_ITEM_H + scrollY + 15) + "px";
+        el.style.display = "";
+        domVisible.set(i, el);
+      }
+    }
+  }
+
+  // Hook into scroll tick
+  const origTickFn = animator._tickFn;
+  animator._tickFn = (dt) => {
+    const r = origTickFn?.(dt) ?? false;
+    updateVListDOM();
+    return r;
+  };
+
+  // Also update on wheel (immediate feedback)
+  const origWheel = ex.scroll_wheel;
+
   // ── Wheel scroll ──
 
   canvas.style.touchAction = "none";
   canvas.style.overscrollBehavior = "none";
+  container.style.overflow = "hidden";
 
   // Hit test → region ID (cached per pointer position)
   let _activeRegion = 0;
@@ -278,6 +336,7 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
     const dx = (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY))
       ? -((Math.abs(e.deltaX) > Math.abs(e.deltaY)) ? e.deltaX : e.deltaY) * scale : 0;
     ex.scroll_wheel?.(B(_activeRegion), dx || 0, dy || 0);
+    updateVListDOM();
     animator.kick();
   }, { passive: false });
 

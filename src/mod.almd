@@ -107,6 +107,11 @@ fn do_prepare(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int,
   draw_at_scroll()
 }
 
+// ── Scroll position accessor ──
+
+@export(wasm, "get_scroll_pos")
+fn get_scroll_pos(region: Int, axis: Int) -> Float = sc.get_pos(region, axis)
+
 // ── Unified hit test ──
 // Returns type * 256 + region_id
 // Types: 0=none, 1=region, 2=thumb_y, 3=thumb_x, 4=track_y, 5=track_x
