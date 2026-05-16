@@ -196,7 +196,14 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
   // ── Render items: View tree rects from storage buffer ──
   let ri_count = u32(render_items[2].w);  // item_count from first item's slot
   if ri_count > 0u {
-    var bg = vec3<f32>(0.08, 0.08, 0.10);
+    // Gradient background (visible through glass)
+  let grad_t = f32(py) / f32(params.height);
+  let grad_x = f32(px) / f32(params.width);
+  var bg = mix(
+    mix(vec3<f32>(0.15, 0.05, 0.25), vec3<f32>(0.05, 0.15, 0.30), grad_x),
+    mix(vec3<f32>(0.20, 0.08, 0.12), vec3<f32>(0.05, 0.20, 0.15), grad_x),
+    grad_t
+  );
     // Iterate items front-to-back, blend
     for (var ri = 0u; ri < min(ri_count, 256u); ri++) {
       let pos = render_items[ri * 3u];       // x, y, w, h
@@ -366,17 +373,68 @@ fn scrollbar_sdf(px_pos: vec2<f32>, thumb_center: vec2<f32>, thumb_half: vec2<f3
   return sd_rounded_box(px_pos - thumb_center, thumb_half, corner_r);
 }
 
+// GPU glass: box blur from pixel buffer
+fn sample_px(x: i32, y: i32, w: u32, h: u32) -> vec3<f32> {
+  let cx = u32(clamp(x, 0, i32(w) - 1));
+  let cy = u32(clamp(y, 0, i32(h) - 1));
+  let p = render_pixels[cy * w + cx];
+  return vec3<f32>(f32(p & 0xFFu), f32((p >> 8u) & 0xFFu), f32((p >> 16u) & 0xFFu)) / 255.0;
+}
+
+fn blur_at(px: i32, py: i32, w: u32, h: u32, radius: i32) -> vec3<f32> {
+  var sum = vec3<f32>(0.0);
+  var n = 0.0;
+  for (var dy = -radius; dy <= radius; dy += 2) {
+    for (var dx = -radius; dx <= radius; dx += 2) {
+      sum += sample_px(px + dx, py + dy, w, h);
+      n += 1.0;
+    }
+  }
+  return sum / n;
+}
+
 @fragment
 fn fs_fullscreen(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
   let w = f32(render_params.width);
   let h = f32(render_params.height);
+  let w_u = render_params.width;
+  let h_u = render_params.height;
   let px_u = u32(uv.x * w);
   let py_u = u32(uv.y * h);
-  let idx = py_u * render_params.width + px_u;
+  let idx = py_u * w_u + px_u;
   let packed = render_pixels[idx];
   var r = f32(packed & 0xFFu) / 255.0;
   var g = f32((packed >> 8u) & 0xFFu) / 255.0;
   var b = f32((packed >> 16u) & 0xFFu) / 255.0;
+
+  // ── Glass blur: items with opacity < 1.0 get backdrop blur ──
+  let ri_count = u32(render_items[2].w);
+  for (var ri = 0u; ri < min(ri_count, 256u); ri++) {
+    let pos = render_items[ri * 3u];
+    let col = render_items[ri * 3u + 1u];
+    let im = render_items[ri * 3u + 2u];
+    let opacity = im.y;
+
+    if opacity < 0.99 && opacity > 0.01 && col.w > 0.01 {
+      let ix = pos.x; let iy = pos.y; let iw = pos.z; let ih = pos.w;
+      let cr = im.x;
+
+      if f32(px_u) >= ix && f32(px_u) < ix + iw && f32(py_u) >= iy && f32(py_u) < iy + ih {
+        let local = vec2<f32>(f32(px_u) - ix - iw * 0.5, f32(py_u) - iy - ih * 0.5);
+        let half_sz = vec2<f32>(iw * 0.5, ih * 0.5);
+        let d = sd_rounded_box(local, half_sz, cr);
+
+        if d < 0.5 {
+          let aa = 1.0 - smoothstep(-1.0, 0.5, d);
+          let blurred = blur_at(i32(px_u), i32(py_u), w_u, h_u, 10);
+          let tinted = mix(blurred, col.xyz, 0.2);
+          r = mix(r, tinted.x, aa * opacity);
+          g = mix(g, tinted.y, aa * opacity);
+          b = mix(b, tinted.z, aa * opacity);
+        }
+      }
+    }
+  }
 
   let px_x = uv.x * w;
   let px_y = uv.y * h;
