@@ -157,8 +157,13 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
         if f32(py) < params.list_clip_top || f32(py) >= params.list_clip_bottom { continue; }
       }
 
+      // Pixel-level AABB reject (cheaper than SDF)
+      let fpx = f32(px);
+      let fpy = f32(py);
+      if fpx < ix || fpx > ix + iw || fpy < iy || fpy > iy + ih { continue; }
+
       let corner_r = item_meta.x;
-      let local = vec2<f32>(f32(px) - ix - iw * 0.5, f32(py) - iy - ih * 0.5);
+      let local = vec2<f32>(fpx - ix - iw * 0.5, fpy - iy - ih * 0.5);
       let half = vec2<f32>(iw * 0.5, ih * 0.5);
       let d = sd_rounded_box(local, half, corner_r);
 

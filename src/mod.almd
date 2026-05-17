@@ -55,6 +55,9 @@ fn rebuild_and_upload() -> Unit = {
     let clip_bottom = (render.list_frame_y + render.list_frame_height) * s
     gpu.write_f32_at(cached_scene.device, cached_scene.params_buf, 20, clip_top)
     gpu.write_f32_at(cached_scene.device, cached_scene.params_buf, 24, clip_bottom)
+    // Override content_tiles_y so root scrollbar knows actual content height
+    let content_tiles = float.to_int(float.ceil(content_h * s / 16.0))
+    gpu.write_u32_at(cached_scene.device, cached_scene.params_buf, 16, content_tiles)
   } else ()
 }
 
@@ -120,8 +123,12 @@ fn set_mouse(css_x: Float, css_y: Float) -> Unit = {
     let s = dpr()
     gpu.write_f32_at(cached_scene.device, cached_scene.params_buf, 56, css_x * s)
     gpu.write_f32_at(cached_scene.device, cached_scene.params_buf, 60, css_y * s)
-    snaidhm.draw_render_only(cached_scene)
   } else ()
+}
+
+@export(wasm, "draw_light")
+fn draw_light() -> Unit = {
+  if scene_ready then snaidhm.draw_render_only(cached_scene) else ()
 }
 
 @export(wasm, "set_hover")
@@ -187,6 +194,18 @@ fn scroll_wheel(region: Int, dx: Float, dy: Float) -> Unit =
 
 @export(wasm, "get_scroll_pos")
 fn get_scroll_pos(region: Int, axis: Int) -> Float = sc.get_pos(region, axis)
+
+@export(wasm, "set_scroll_frac")
+fn set_scroll_frac(frac: Float) -> Unit = {
+  let ry = sc.ax(root_region, sc.AXIS_Y)
+  sc.set_scrollbar_frac(ry, frac, sc.rgn_content_h[root_region], sc.rgn_bounds_h[root_region])
+}
+
+@export(wasm, "get_scroll_info")
+fn get_scroll_info() -> Float = {
+  // Returns content_h * 1000 + viewport_h (packed for simplicity)
+  sc.rgn_content_h[root_region] * 10000.0 + sc.rgn_bounds_h[root_region]
+}
 
 // ══════════════════════════════════════════════════════════════
 // Exports: Test helpers

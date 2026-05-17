@@ -373,14 +373,34 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   // Events: wheel → physics only, animator handles rendering
   // ══════════════════════════════════════════════════════════
 
-  // Mouse light effect (fragment-only re-render, no compute)
+  // Mouse light (write params + fragment-only render if not scrolling)
   canvas.addEventListener("mousemove", (e) => {
     const rect = canvas.getBoundingClientRect();
     ex.set_mouse?.(e.clientX - rect.left, e.clientY - rect.top);
+    if (!_dragging && animator._raf === null) ex.draw_light?.();
   });
   canvas.addEventListener("mouseleave", () => {
     ex.set_mouse?.(0, 0);
+    if (animator._raf === null) ex.draw_light?.();
   });
+
+  // Scrollbar drag — use same animator as wheel scroll
+  let _dragging = false;
+  canvas.addEventListener("mousedown", (e) => {
+    const rect = canvas.getBoundingClientRect();
+    if (e.clientX - rect.left > rect.width - 20) {
+      _dragging = true;
+      e.preventDefault();
+    }
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!_dragging) return;
+    const rect = canvas.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+    ex.set_scroll_frac?.(frac);
+    animator.kick();
+  });
+  window.addEventListener("mouseup", () => { _dragging = false; });
 
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();

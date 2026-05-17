@@ -45,14 +45,15 @@ fn todo_item(item: Todo) -> v.View =
     v.text(if item.done then "[x] " + item.title else "[ ] " + item.title)
       |> v.grow(1.0)
       |> t.text_base
-      |> v.color(if item.done then t.gray_400 else v.white),
+      |> v.color(if item.done then t.gray_400 else v.white)
+      |> v.strikethrough(item.done),
   ])
-  |> todo_card
+  |> t.glass_card
 
 fn make_items() -> List[v.View] = {
   var items: List[v.View] = []
-  for t in todos.get() {
-    list.push(items, todo_item(t))
+  for item in todos.get() {
+    list.push(items, todo_item(item))
   }
   items
 }
@@ -60,16 +61,19 @@ fn make_items() -> List[v.View] = {
 fn app() -> v.View =
   v.col([
     // Header
-    v.col([v.text("Todos (" + int.to_string(active_count()) + ")") |> v.font(20.0) |> v.bold])
-      |> v.h(56.0) |> v.bg(v.rgba(0.15, 0.18, 0.25, 0.9)) |> v.padding(12.0),
-    // List (grow=1, scrollable)
+    v.col([
+      v.text("Todos") |> t.heading,
+      v.text(int.to_string(active_count()) + " remaining") |> t.caption,
+    ])
+    |> v.h(64.0) |> v.gap(4.0)
+    |> t.glass_dark |> v.padding(t.sp_4),
+    // List
     v.list(make_items(), 56.0) |> v.grow(1.0),
     // Add button
-    v.col([v.text("+ Add (Enter)") |> v.font(14.0)])
-      |> v.h(48.0) |> v.bg(v.rgba(0.25, 0.5, 0.9, 1.0)) |> v.padding(12.0)
-      |> v.rounded(8.0),
+    v.col([v.text("+ Add") |> t.text_base |> v.color(v.white)])
+      |> t.button_primary |> v.h(48.0),
   ])
-  |> v.gap(8.0) |> v.padding(12.0)
+  |> v.gap(t.sp_2) |> v.padding(t.sp_3)
 
 // ── Framework ──
 
