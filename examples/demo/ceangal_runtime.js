@@ -1,7 +1,10 @@
-// ceangal runtime — WASM host for DOM + GPU + font imports
+// ceangal v2 runtime — clean single-loop architecture
 //
-// Thin bridge: all scroll physics + scrollbar state live in WASM (Almide).
-// JS handles: event dispatch, rAF loop, WebGPU context, resource loading.
+// Rules:
+//   1. ONE rAF loop (ScrollAnimator only)
+//   2. ZERO DOM creation during scroll (transform only)
+//   3. State change → rebuild DOM overlay
+//   4. Scroll → WASM physics + GPU draw (no tree ops)
 
 import { TTFFont } from "./ttf.js";
 import { generateSDFAtlas } from "./sdf.js";
@@ -64,6 +67,9 @@ function createGpuImports(canvas) {
     },
     write_f32_at(deviceId, bufferId, byteOffset, value) {
       g(deviceId).queue.writeBuffer(g(bufferId), N(byteOffset), new Float32Array([value]));
+    },
+    write_u32_at(deviceId, bufferId, byteOffset, value) {
+      g(deviceId).queue.writeBuffer(g(bufferId), N(byteOffset), new Uint32Array([N(value)]));
     },
     create_compute_pipeline(deviceId, shaderId, _) {
       return B(h(g(deviceId).createComputePipeline({ layout: "auto", compute: { module: g(shaderId), entryPoint: "fine" } })));
@@ -166,11 +172,10 @@ function createFontImports(fontBuffer) {
   };
 }
 
-// ── Scroll animator (rAF bridge — physics lives in WASM) ──
+// ── Scroll animator (single rAF loop) ──
 
 class ScrollAnimator {
   constructor() { this._raf = null; this._lastTime = 0; this._tickFn = null; }
-
   kick() {
     if (this._raf !== null) return;
     this._lastTime = performance.now();
@@ -185,13 +190,14 @@ class ScrollAnimator {
     };
     this._raf = requestAnimationFrame(loop);
   }
-
   stop() {
     if (this._raf !== null) { cancelAnimationFrame(this._raf); this._raf = null; }
   }
 }
 
-// ── Init ──
+// ══════════════════════════════════════════════════════════════
+// Init
+// ══════════════════════════════════════════════════════════════
 
 export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   if (!navigator.gpu) throw new Error("WebGPU not supported");
@@ -202,6 +208,7 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   });
   _format = navigator.gpu.getPreferredCanvasFormat();
 
+  // Load resources
   const [rasterCode, textCode, imageCode, fontBuffer] = await Promise.all([
     fetch("./raster.wgsl?v=" + Date.now()).then(r => r.text()),
     fetch("./text.wgsl?v=" + Date.now()).then(r => r.text()),
@@ -214,12 +221,43 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   const chars = []; for (let i = 32; i < 127; i++) chars.push(String.fromCharCode(i));
   _atlas = generateSDFAtlas(_font, chars, 48, 6);
 
-  // Image resources (demo)
+  // Dummy image resources
   const imgTex = _device.createTexture({ size: [1, 1], format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
   _device.queue.writeTexture({ texture: imgTex }, new Uint8Array([0,0,0,0]), { bytesPerRow: 4 }, [1,1]);
   const imgSamp = _device.createSampler({ magFilter: "linear", minFilter: "linear" });
   const imgVtx = _device.createBuffer({ size: 16, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
   const imgIdx = _device.createBuffer({ size: 4, usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST });
+
+  // Background texture
+  const bgSampObj = _device.createSampler({ magFilter: "linear", minFilter: "linear", addressModeU: "clamp-to-edge", addressModeV: "clamp-to-edge" });
+  let bgTex;
+  try {
+    const resp = await fetch("./bg.jpg");
+    if (resp.ok) {
+      const bmp = await createImageBitmap(await resp.blob());
+      bgTex = _device.createTexture({ size: [bmp.width, bmp.height], format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT });
+      _device.queue.copyExternalImageToTexture({ source: bmp }, { texture: bgTex }, [bmp.width, bmp.height]);
+    }
+  } catch (_) {}
+  if (!bgTex) {
+    // Procedural wallpaper fallback
+    const W = 512, H = 512;
+    const c = document.createElement("canvas"); c.width = W; c.height = H;
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = "#0a0e1a"; ctx.fillRect(0, 0, W, H);
+    for (const b of [
+      { x: 0.2, y: 0.3, r: 0.6, c: "rgba(90,20,140,0.7)" },
+      { x: 0.8, y: 0.2, r: 0.5, c: "rgba(20,60,160,0.6)" },
+      { x: 0.5, y: 0.8, r: 0.7, c: "rgba(10,100,120,0.5)" },
+    ]) {
+      const grad = ctx.createRadialGradient(b.x*W, b.y*H, 0, b.x*W, b.y*H, b.r*W);
+      grad.addColorStop(0, b.c); grad.addColorStop(1, "transparent");
+      ctx.fillStyle = grad; ctx.fillRect(0, 0, W, H);
+    }
+    const bmp = await createImageBitmap(c);
+    bgTex = _device.createTexture({ size: [W, H], format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT });
+    _device.queue.copyExternalImageToTexture({ source: bmp }, { texture: bgTex }, [W, H]);
+  }
 
   // WASM
   const wasi = new Proxy({}, { get: () => () => 0 });
@@ -234,13 +272,24 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   if (instance.exports._start) try { instance.exports._start(); } catch (_) {}
 
   const ex = instance.exports;
+  window._ceangal = ex;
   const container = canvas.parentElement;
   const img = { vtx: h(imgVtx), idx: h(imgIdx), tex: h(imgTex), samp: h(imgSamp) };
+
+  // ══════════════════════════════════════════════════════════
+  // Animator: single rAF loop
+  // ══════════════════════════════════════════════════════════
+
   const animator = new ScrollAnimator();
+  animator._tickFn = (dt) => {
+    const running = ex.scroll_tick ? N(ex.scroll_tick(dt)) === 1 : false;
+    updateScrollTransform();
+    return running;
+  };
 
-  animator._tickFn = (dt) => ex.scroll_tick ? N(ex.scroll_tick(dt)) === 1 : false;
-
-  // ── Scene lifecycle ──
+  // ══════════════════════════════════════════════════════════
+  // Scene lifecycle
+  // ══════════════════════════════════════════════════════════
 
   function prepare() {
     const cw = container.clientWidth, ch = container.clientHeight;
@@ -251,319 +300,120 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
     _context = canvas.getContext("webgpu");
     _context.configure({ device: _device, format: _format, alphaMode: "premultiplied" });
     ex.prepare_scene?.(B(h(_device)), B(cw), B(ch), B(pw), B(ph),
-      B(img.vtx), B(img.idx), B(0), B(img.tex), B(img.samp));
+      B(img.vtx), B(img.idx), B(0), B(img.tex), B(img.samp),
+      B(h(bgTex)), B(h(bgSampObj)));
   }
 
-  let _firstRender = true;
-  function renderAll() {
-    animator.stop();
-    prepare();
-    if (_firstRender) {
-      ex.todo_init_data?.();
-      // Re-prepare to include initial data
-      prepare();
-      _firstRender = false;
-    }
-    updateViewTextOverlay();
-  }
+  prepare();
+  ex.todo_init_data?.();
 
-  renderAll();
+  // ══════════════════════════════════════════════════════════
+  // DOM overlay: built ONCE on state change, scroll via transform
+  // ══════════════════════════════════════════════════════════
 
-  // ── Virtual list DOM overlay ──
-  const VLIST_ITEM_H = 0;
-  const VLIST_COUNT = 0;
+  let _scrollInner = null;
 
-  // View tree DOM text overlay
-  function updateViewTextOverlay() {
-    if (!ex.get_item_count) return;
-    // Clear old overlay
+  function buildOverlay() {
     while (overlayEl.firstChild) overlayEl.removeChild(overlayEl.firstChild);
 
-    const count = N(ex.get_item_count());
+    const listTop = ex.get_list_frame_y ? ex.get_list_frame_y() : 0;
+    const listH = ex.get_list_frame_h ? ex.get_list_frame_h() : 9999;
+
+    // Scroll wrapper (clips list items)
+    const wrapper = document.createElement("div");
+    wrapper.style.cssText = `position:absolute;left:0;top:${listTop}px;width:100%;height:${listH}px;overflow:hidden;pointer-events:none;`;
+    const inner = document.createElement("div");
+    inner.style.cssText = "position:relative;width:100%;pointer-events:none;";
+    wrapper.appendChild(inner);
+    overlayEl.appendChild(wrapper);
+    _scrollInner = inner;
+
+    const count = ex.get_item_count ? N(ex.get_item_count()) : 0;
     for (let i = 0; i < count; i++) {
       const kind = N(ex.get_item_kind(B(i)));
-      if (kind !== 0) continue; // only TEXT nodes (kind=0)
+      if (kind !== 0) continue; // TEXT only
 
       const x = Number(ex.get_item_x(B(i)));
       const y = Number(ex.get_item_y(B(i)));
       const w = Number(ex.get_item_w(B(i)));
-      const h = Number(ex.get_item_h(B(i)));
+      const itemH = Number(ex.get_item_h(B(i)));
+      const scrollable = ex.get_item_scrollable ? N(ex.get_item_scrollable(B(i))) : 0;
       const textId = N(ex.get_item_text(B(i)));
       const text = strings[textId] || "";
-
       if (!text) continue;
 
       const fontSize = ex.get_item_font_size ? Number(ex.get_item_font_size(B(i))) : 14;
-      const canSelect = ex.get_item_selectable ? N(ex.get_item_selectable(B(i))) === 1 : true;
       const span = document.createElement("span");
       span.textContent = text;
-      const pe = canSelect ? "pointer-events:auto;user-select:text;cursor:text;" : "pointer-events:none;user-select:none;";
-      span.style.cssText = `position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;display:flex;align-items:center;font:${fontSize}px sans-serif;color:white;overflow:hidden;${pe}`;
-      overlayEl.appendChild(span);
-    }
-  }
+      span.style.cssText = `position:absolute;left:${x}px;top:${scrollable ? y - listTop : y}px;width:${w}px;height:${itemH}px;display:flex;align-items:center;font:${fontSize}px sans-serif;color:white;overflow:hidden;pointer-events:none;user-select:none;`;
 
-  updateViewTextOverlay();
-  const domPool = []; // recycled <div> elements
-  let domVisible = new Map(); // index → element
-
-  function updateVListDOM() {
-    if (!ex.scroll_tick) return; // no scroll engine
-    const scrollY = ex.get_scroll_pos ? Number(ex.get_scroll_pos(B(0), B(0))) : 0;
-    const ch = container.clientHeight;
-    const visTop = -scrollY;
-    const visBot = visTop + ch;
-    const startIdx = Math.max(0, Math.floor(visTop / VLIST_ITEM_H));
-    const endIdx = Math.min(VLIST_COUNT, Math.ceil(visBot / VLIST_ITEM_H));
-
-    // Remove out-of-view items
-    for (const [idx, el] of domVisible) {
-      if (idx < startIdx || idx >= endIdx) {
-        el.style.display = "none";
-        domPool.push(el);
-        domVisible.delete(idx);
-      }
-    }
-
-    // Add in-view items
-    for (let i = startIdx; i < endIdx; i++) {
-      if (domVisible.has(i)) {
-        // Update position
-        const el = domVisible.get(i);
-        el.style.top = (i * VLIST_ITEM_H + scrollY + 15) + "px";
+      if (scrollable) {
+        inner.appendChild(span);
       } else {
-        // Get or create element
-        let el = domPool.pop();
-        if (!el) {
-          el = document.createElement("div");
-          el.style.cssText = "position:absolute;left:5%;pointer-events:none;font:14px sans-serif;color:rgba(255,255,255,0.85);line-height:" + VLIST_ITEM_H + "px;white-space:nowrap;user-select:text;";
-          overlayEl.appendChild(el);
-        }
-        el.textContent = "Item " + i;
-        el.style.top = (i * VLIST_ITEM_H + scrollY + 15) + "px";
-        el.style.display = "";
-        domVisible.set(i, el);
+        overlayEl.appendChild(span);
       }
     }
+    updateScrollTransform();
   }
 
-  // Hook into scroll tick
-  const origTickFn = animator._tickFn;
-  animator._tickFn = (dt) => {
-    const r = origTickFn?.(dt) ?? false;
-    updateVListDOM();
-    return r;
-  };
+  function updateScrollTransform() {
+    if (!_scrollInner) return;
+    const scrollY = ex.get_scroll_pos ? ex.get_scroll_pos(B(0), B(0)) : 0;
+    _scrollInner.style.transform = `translateY(${scrollY}px)`;
+  }
 
-  // Also update on wheel (immediate feedback)
-  const origWheel = ex.scroll_wheel;
+  // Initial overlay build (after all functions defined)
+  buildOverlay();
 
-  // ── Wheel scroll ──
-
-  canvas.style.touchAction = "none";
-  canvas.style.overscrollBehavior = "none";
-  container.style.overflow = "hidden";
-
-  // Hit test → region ID (cached per pointer position)
-  let _activeRegion = 0;
+  // ══════════════════════════════════════════════════════════
+  // Events: wheel → physics only, animator handles rendering
+  // ══════════════════════════════════════════════════════════
 
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
     const scale = e.deltaMode === 1 ? 20 : 1;
-    const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
-    const hit = doHitTest(mx, my);
-    _activeRegion = hit.region;
     const dy = -e.deltaY * scale;
-    const dx = (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY))
-      ? -((Math.abs(e.deltaX) > Math.abs(e.deltaY)) ? e.deltaX : e.deltaY) * scale : 0;
-    ex.scroll_wheel?.(B(_activeRegion), dx || 0, dy || 0);
-    updateVListDOM();
+    ex.scroll_wheel?.(B(0), 0, dy);
     animator.kick();
   }, { passive: false });
 
-  // ── Touch drag scroll ──
+  // ══════════════════════════════════════════════════════════
+  // Events: click → state change → rebuild
+  // ══════════════════════════════════════════════════════════
 
-  let _dragging = false, _lastPY = 0;
-  const _samples = []; // {t, y} — last 6 samples for velocity estimation
-
-  function estimateVelocity() {
-    // Weighted linear regression over recent samples (Flutter VelocityTracker inspired)
-    const n = _samples.length;
-    if (n < 2) return 0;
-    const now = _samples[n - 1].t;
-    let sw = 0, swt = 0, swy = 0, swtt = 0, swty = 0;
-    for (const s of _samples) {
-      const age = (now - s.t) / 1000;
-      if (age > 0.15) continue; // ignore samples older than 150ms
-      const w = 1 / (1 + age * 10); // recent samples weighted more
-      const t = -age;
-      sw += w; swt += w * t; swy += w * s.y; swtt += w * t * t; swty += w * t * s.y;
-    }
-    const det = sw * swtt - swt * swt;
-    return det > 1e-9 ? (sw * swty - swt * swy) / det : 0;
-  }
-
-  canvas.addEventListener("pointerdown", (e) => {
-    if (e.pointerType === "mouse" || e.button !== 0) return;
-    _dragging = true; _lastPY = e.clientY;
-    _samples.length = 0; _samples.push({ t: performance.now(), y: e.clientY });
-    canvas.setPointerCapture(e.pointerId);
-  });
-  canvas.addEventListener("pointermove", (e) => {
-    if (!_dragging) return;
-    const dy = e.clientY - _lastPY; _lastPY = e.clientY;
-    _samples.push({ t: performance.now(), y: e.clientY });
-    if (_samples.length > 8) _samples.shift();
-    ex.scroll_drag?.(B(_activeRegion), dy);
-  });
-  canvas.addEventListener("pointerup", (e) => {
-    if (!_dragging) return; _dragging = false;
-    ex.scroll_release?.(B(_activeRegion), estimateVelocity());
-    animator.kick();
-  });
-  canvas.addEventListener("pointercancel", () => { _dragging = false; });
-
-  // ── Unified hit test + interaction (all logic in WASM) ──
-
-  const HIT_NONE = 0, HIT_REGION = 1, HIT_THUMB_Y = 2, HIT_THUMB_X = 3, HIT_TRACK_Y = 4, HIT_TRACK_X = 5;
-  let _interaction = null; // { type, region, axis }
-
-  function doHitTest(mx, my) {
-    if (!ex.hit_test) return { type: HIT_REGION, region: 0 };
-    const packed = N(ex.hit_test(mx, my));
-    return { type: (packed >> 8) & 0xFF, region: packed & 0xFF };
-  }
-
-  // Hover
-  canvas.addEventListener("mousemove", (e) => {
-    if (_interaction) return;
-    const rect = canvas.getBoundingClientRect();
-    const hit = doHitTest(e.clientX - rect.left, e.clientY - rect.top);
-    const nearBar = hit.type >= HIT_THUMB_Y;
-    ex.scrollbar_set_hover_y?.(nearBar && (hit.type === HIT_THUMB_Y || hit.type === HIT_TRACK_Y) ? 1.0 : 0.0);
-    ex.scrollbar_set_hover_x?.(nearBar && (hit.type === HIT_THUMB_X || hit.type === HIT_TRACK_X) ? 1.0 : 0.0);
-    animator.kick();
-  });
-
-  canvas.addEventListener("mouseleave", () => {
-    if (!_interaction) {
-      ex.scrollbar_set_hover_y?.(0.0);
-      ex.scrollbar_set_hover_x?.(0.0);
-      animator.kick();
-    }
-  });
-
-  // Mousedown: dispatch based on hit type
-  canvas.addEventListener("mousedown", (e) => {
-    if (e.button !== 0) return;
-    const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
-    const hit = doHitTest(mx, my);
-
-    if (hit.type === HIT_THUMB_Y) {
-      _interaction = { type: hit.type, region: hit.region, axis: 0 };
-      e.preventDefault();
-    } else if (hit.type === HIT_THUMB_X) {
-      _interaction = { type: hit.type, region: hit.region, axis: 1 };
-      e.preventDefault();
-    } else if (hit.type === HIT_TRACK_Y) {
-      ex.track_tap_at?.(B(hit.region), B(0), my);
-      animator.kick(); e.preventDefault();
-    } else if (hit.type === HIT_TRACK_X) {
-      ex.track_tap_at?.(B(hit.region), B(1), mx);
-      animator.kick(); e.preventDefault();
-    }
-  });
-
-  // Mousemove: scrollbar drag
-  window.addEventListener("mousemove", (e) => {
-    if (!_interaction) return;
-    const rect = canvas.getBoundingClientRect();
-    const pos = _interaction.axis === 0 ? e.clientY - rect.top : e.clientX - rect.left;
-    ex.scrollbar_drag_to?.(B(_interaction.region), B(_interaction.axis), pos);
-    animator.kick();
-  });
-
-  window.addEventListener("mouseup", () => { _interaction = null; });
-
-  // ── Hover ──
-  // Mouse light with smooth lerp follow
-  let _mouseTarget = { x: 0, y: 0 };
-  let _lightPos = { x: 0, y: 0 };
-  let _lightRaf = null;
-
-  container.addEventListener("mousemove", (e) => {
-    const rect = canvas.getBoundingClientRect();
-    _mouseTarget.x = e.clientX - rect.left;
-    _mouseTarget.y = e.clientY - rect.top;
-    if (ex.set_hover) ex.set_hover(_mouseTarget.x, _mouseTarget.y);
-    if (!_lightRaf) startLightLoop();
-  });
-
-  function startLightLoop() {
-    const dpr = window.devicePixelRatio || 1;
-    const loop = () => {
-      // Lerp: light follows mouse with easing
-      _lightPos.x += (_mouseTarget.x - _lightPos.x) * 0.08;
-      _lightPos.y += (_mouseTarget.y - _lightPos.y) * 0.08;
-      if (ex.set_mouse_light) ex.set_mouse_light(_lightPos.x * dpr, _lightPos.y * dpr);
-
-      // Stop loop if close enough
-      const dx = _mouseTarget.x - _lightPos.x;
-      const dy = _mouseTarget.y - _lightPos.y;
-      if (dx * dx + dy * dy > 0.5) {
-        _lightRaf = requestAnimationFrame(loop);
-      } else {
-        _lightRaf = null;
-      }
-    };
-    _lightRaf = requestAnimationFrame(loop);
-  }
-
-  // ── Todo actions ──
-  function handleTodoClick(e) {
+  function handleClick(e) {
     if (!ex.handle_click) return;
     const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-    const todoId = N(ex.handle_click(mx, my));
-    if (todoId >= 0) {
-      ex.todo_toggle(B(todoId));
-      updateViewTextOverlay();
+    const result = N(ex.handle_click(e.clientX - rect.left, e.clientY - rect.top));
+    if (result >= 0) {
+      ex.todo_toggle(B(result));
+      buildOverlay();
+    } else if (result === -2) {
+      ex.todo_add();
+      buildOverlay();
     }
   }
-  canvas.addEventListener("click", handleTodoClick);
-  overlayEl.addEventListener("click", handleTodoClick);
+  canvas.addEventListener("click", handleClick);
 
   window.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && ex.todo_add) {
       ex.todo_add();
-      updateViewTextOverlay();
+      buildOverlay();
     }
   });
 
-  // ── Keyboard scroll ──
-  canvas.tabIndex = 0;
-  canvas.setAttribute("role", "application");
-  canvas.setAttribute("aria-label", "Scrollable content");
-  canvas.focus();
-  const keyMap = { ArrowUp: 0, ArrowDown: 1, ArrowLeft: 2, ArrowRight: 3, PageUp: 4, PageDown: 5, Home: 6, End: 7 };
-  canvas.addEventListener("keydown", (e) => {
-    const code = keyMap[e.key];
-    if (code !== undefined && ex.scroll_key) {
-      e.preventDefault();
-      ex.scroll_key(B(code));
-      animator.kick();
-    }
-  });
-
-  // ── Resize + visibility ──
+  // ══════════════════════════════════════════════════════════
+  // Resize
+  // ══════════════════════════════════════════════════════════
 
   let _resizeTimer;
   window.addEventListener("resize", () => {
     clearTimeout(_resizeTimer);
-    _resizeTimer = setTimeout(renderAll, 150);
+    _resizeTimer = setTimeout(() => {
+      animator.stop();
+      prepare();
+      ex.todo_init_data?.(); // re-init after resize
+      buildOverlay();
+    }, 150);
   });
-  document.addEventListener("visibilitychange", () => { if (document.hidden) animator.stop(); });
 }

@@ -4,7 +4,7 @@ version = "0.0.1"
 description = "UI framework for Almide — layout, widget, interaction on top of snaidhm"
 
 [dependencies]
-snaidhm = { git = "https://github.com/dubhlux/snaidhm.git" }
+snaidhm = { git = "https://github.com/almide-graphics/snaidhm.git" }
 
 [targets]
 wasm = true

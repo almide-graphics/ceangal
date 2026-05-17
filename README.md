@@ -1,9 +1,20 @@
-# ceangal
+<p align="center">
+  <img src="assets/logo.png" alt="Ceangal" width="200">
+</p>
 
-**UI framework for Almide** — layout, widget, and interaction layer on top of [snaidhm](https://github.com/dubhlux/snaidhm).
+<h1 align="center">ceangal</h1>
 
-> *ceangal* (Irish: /ˈcaŋɡəl/) — binding, bond, connection.
-> snaidhm ties the knots; ceangal binds them into a UI.
+<p align="center">
+  <strong>GPU-native UI framework for Almide</strong><br>
+  Layout, widget, and interaction layer on top of <a href="https://github.com/almide-graphics/snaidhm">snaidhm</a>.
+</p>
+
+<p align="center">
+  <em>ceangal</em> (Irish: /ˈcaŋɡəl/) — binding, bond, connection.<br>
+  snaidhm ties the knots; ceangal binds them into a UI.
+</p>
+
+---
 
 ## Stack
 
@@ -15,21 +26,18 @@ Apps (nendo, ...)
                  └─ almide  ← language, WASM/WGSL codegen
 ```
 
+## Features
+
+- **Yoga-compatible Flexbox** — full layout engine (flex, gap, wrap, absolute positioning, percentage sizes)
+- **GPU compute rendering** — all UI elements rendered via compute shaders, zero Canvas 2D
+- **DOM overlay** — text selection, copy, accessibility (ARIA), IME input
+- **Virtual list** — O(1) scroll with fixed-height items
+- **Declarative views** — `View -> View` pipeline with opaque modifiers
+- **Reactive state** — Cell-based dirty tracking, minimal re-render
+
 ## Status
 
-Early development. Interaction layer prototyped in snaidhm demo, being extracted here.
-
-## Planned Scope
-
-- **Layout engine** — Flexbox subset (Row, Column, Padding, Spacer)
-- **Widget system** — Button, TextField, Label, Card, List
-- **DOM overlay** — text selection, copy, accessibility (ARIA)
-- **Text input** — IME-compatible textarea overlay
-- **Text shaping** — harfbuzzjs integration for CJK, ligatures, BiDi
-- **Hit testing** — canvas click → element identification
-- **Routing** — History API
-- **State management** — unidirectional data flow
-- **Theming** — design tokens
+Active development. Flexbox layout engine complete (74 Yoga-aligned tests passing). GPU rendering pipeline operational.
 
 ## License
 

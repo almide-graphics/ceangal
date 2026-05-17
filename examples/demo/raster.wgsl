@@ -19,17 +19,17 @@ struct Params {
   seg_count: u32,
   content_tiles_x: u32,
   content_tiles_y: u32,
-  shadow_count: u32,
-  num_paths: u32,
+  list_clip_top: f32,
+  list_clip_bottom: f32,
   scroll_y: f32,
   scroll_x: f32,
   scrollbar_opacity_y: f32,
   scrollbar_opacity_x: f32,
-  _pad0: u32,
+  hover_item_idx: f32,
   scrollbar_hover_y: f32,
   scrollbar_hover_x: f32,
-  vlist_item_h: f32,      // virtual list: item height in physical px (0 = disabled)
-  vlist_item_count: f32,  // virtual list: total item count (as float)
+  mouse_x: f32,           // mouse position (physical px) for light effect
+  mouse_y: f32,           // mouse position (physical px)
 }
 
 struct Shadow {
@@ -73,8 +73,8 @@ fn evaluate_paint(paint: Paint, p: vec2<f32>) -> vec4<f32> {
 @group(0) @binding(5) var<storage, read>       shadows: array<Shadow>;
 @group(0) @binding(6) var<storage, read>       paints: array<Paint>;
 @group(0) @binding(7) var<storage, read>       tile_cmds: array<u32>;
-@group(1) @binding(0) var<storage, read>       scroll_regions: array<vec4<f32>>;
-@group(1) @binding(1) var<storage, read>       render_items: array<vec4<f32>>;
+@group(1) @binding(0) var<storage, read>       render_items: array<vec4<f32>>;
+@group(1) @binding(1) var<storage, read>       scroll_regions: array<vec4<f32>>;
 // Item layout: 3 vec4s per item (48 bytes)
 //   [i*3+0] = (x, y, w, h) in physical px
 //   [i*3+1] = (bg_r, bg_g, bg_b, bg_a)
@@ -126,94 +126,32 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
         @builtin(workgroup_id) wg: vec3<u32>) {
   let px = gid.x;
   let py = gid.y;
+
+  // Viewport-sized buffer: items positioned at viewport-relative coords
   if (px >= params.width || py >= params.height) { return; }
 
-  let w = f32(params.width);
-  let h = f32(params.height);
-  let max_cpx = f32(params.content_tiles_x * TILE_SIZE);
-  let max_cpy = f32(params.content_tiles_y * TILE_SIZE);
-
-  // Root scroll (region 0) from Params
-  var content_px = f32(px) - params.scroll_x;
-  var content_py = f32(py) - params.scroll_y;
-
-  // Apply inner region scroll offsets (innermost match wins)
-  // scroll_info: (scroll_x, scroll_y, content_w, content_h)
-  let region_count = u32(scroll_regions[2].y); // [0*3+2].y = count
-  for (var ri = 1u; ri < min(region_count, MAX_SCROLL_REGIONS); ri++) {
-    let bounds = scroll_regions[ri * 3u];
-    let scroll_info = scroll_regions[ri * 3u + 1u];
-    if content_px >= bounds.x && content_px < bounds.x + bounds.z &&
-       content_py >= bounds.y && content_py < bounds.y + bounds.w {
-      let local_x = content_px - bounds.x;
-      let local_y = content_py - bounds.y;
-      // Inner content position (with scroll offset)
-      let inner_cx = local_x - scroll_info.x;
-      let inner_cy = local_y - scroll_info.y;
-      // Clip: only apply if within inner content bounds
-      if inner_cx >= 0.0 && inner_cx < scroll_info.z &&
-         inner_cy >= 0.0 && inner_cy < scroll_info.w {
-        content_px = bounds.x + inner_cx;
-        content_py = bounds.y + inner_cy;
-      }
-      // else: pixel outside inner content → show outer content (no change)
-    }
-  }
-
-  // ── Overscroll stretch (iOS rubber band visual, skip for virtual list) ──
-  let smin_y = -(max_cpy - h);
-  if params.vlist_item_h < 0.5 {  // only for non-vlist content
-  let ov_top = max(params.scroll_y, 0.0);
-  let ov_bot = max(-(params.scroll_y - smin_y), 0.0);
-  if ov_top > 0.5 {
-    let sf = clamp(ov_top / h * 0.8, 0.0, 0.35);
-    let t = f32(py) / h;
-    content_py = (t * (1.0 + sf) - t * t * sf) * h;
-  } else if ov_bot > 0.5 {
-    let sf = clamp(ov_bot / h * 0.8, 0.0, 0.35);
-    let t = (h - f32(py)) / h;
-    content_py = max_cpy - (t * (1.0 + sf) - t * t * sf) * h;
-  }
-  let smin_x = -(max_cpx - w);
-  let ov_left = max(params.scroll_x, 0.0);
-  let ov_right = max(-(params.scroll_x - smin_x), 0.0);
-  if ov_left > 0.5 {
-    let sf = clamp(ov_left / w * 0.8, 0.0, 0.35);
-    let t = f32(px) / w;
-    content_px = (t * (1.0 + sf) - t * t * sf) * w;
-  } else if ov_right > 0.5 {
-    let sf = clamp(ov_right / w * 0.8, 0.0, 0.35);
-    let t = (w - f32(px)) / w;
-    content_px = max_cpx - (t * (1.0 + sf) - t * t * sf) * w;
-  }
-  } // end vlist_item_h < 0.5 (overscroll stretch)
-
-  if content_px < 0.0 || content_py < 0.0 {
-    pixels[py * params.width + px] = pack_color(0.08, 0.08, 0.10, 1.0);
-    return;
-  }
-
-  // ── Render items: View tree rects from storage buffer ──
-  let ri_count = u32(render_items[2].w);  // item_count from first item's slot
+  // ── Render items: content-space items + scroll_y offset ──
+  let ri_count = u32(render_items[2].w);
   if ri_count > 0u {
-    // Simple dark gradient background (light effects applied in fragment shader)
-  let grad_t = f32(py) / f32(params.height);
-  let grad_x = f32(px) / f32(params.width);
-  var bg = mix(
-    mix(vec3<f32>(0.15, 0.05, 0.25), vec3<f32>(0.05, 0.15, 0.30), grad_x),
-    mix(vec3<f32>(0.20, 0.08, 0.12), vec3<f32>(0.05, 0.20, 0.15), grad_x),
-    grad_t
-  );
-    // Iterate items front-to-back, blend
+    var color = vec3<f32>(0.0);
+    var alpha = 0.0;
+
     for (var ri = 0u; ri < min(ri_count, 256u); ri++) {
-      let pos = render_items[ri * 3u];       // x, y, w, h
+      let pos = render_items[ri * 3u];       // x, y, w, h (content-space)
       let col = render_items[ri * 3u + 1u];  // bg_r, bg_g, bg_b, bg_a
       let item_meta = render_items[ri * 3u + 2u]; // rounded, opacity, 0, count
 
-      let ix = pos.x; let iy = pos.y;
+      let ix = pos.x;
+      let scrollable = item_meta.z;  // 1.0 = list item (scrolls), 0.0 = fixed
+      let iy = pos.y + params.scroll_y * scrollable;
       let iw = pos.z; let ih = pos.w;
 
       if iw < 1.0 || ih < 1.0 || col.w < 0.01 { continue; }
+
+      // Clip scrollable items to list frame
+      if scrollable > 0.5 {
+        if f32(py) < params.list_clip_top || f32(py) >= params.list_clip_bottom { continue; }
+      }
 
       let corner_r = item_meta.x;
       let local = vec2<f32>(f32(px) - ix - iw * 0.5, f32(py) - iy - ih * 0.5);
@@ -222,61 +160,20 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
 
       if d < 1.0 && col.w > 0.01 {
         let aa = 1.0 - smoothstep(-1.0, 0.5, d);
-        let a = aa * col.w * item_meta.y; // alpha * opacity
-        bg = mix(bg, col.xyz, a);
+        let a = aa * col.w * item_meta.y;
+        color = mix(color, col.xyz, a);
+        alpha = alpha + a * (1.0 - alpha);
       }
     }
-    pixels[py * params.width + px] = pack_color(bg.x, bg.y, bg.z, 1.0);
+    pixels[py * params.width + px] = pack_color(color.x, color.y, color.z, alpha);
     return;
   }
 
-  // ── Virtual list fast path: O(1) per pixel, no tiling needed ──
-  if params.vlist_item_h > 0.5 {
-    let total_h = params.vlist_item_h * params.vlist_item_count;
-    if content_py >= total_h {
-      pixels[py * params.width + px] = pack_color(0.08, 0.08, 0.10, 1.0);
-      return;
-    }
-    let item_idx = u32(content_py / params.vlist_item_h);
-    let item_top = f32(item_idx) * params.vlist_item_h;
-    let item_local_y = content_py - item_top;
-    let gap = 3.0;
-    let margin_x = f32(params.width) * 0.03;
-    let corner_r = 8.0;
-
-    // Gap between items
-    if item_local_y < gap || content_px < margin_x || content_px > f32(params.width) - margin_x {
-      pixels[py * params.width + px] = pack_color(0.08, 0.08, 0.10, 1.0);
-      return;
-    }
-
-    // Rounded corners via SDF
-    let rect_h = params.vlist_item_h - gap;
-    let rect_w = f32(params.width) - margin_x * 2.0;
-    let local = vec2<f32>(content_px - margin_x - rect_w * 0.5, item_local_y - gap - rect_h * 0.5);
-    let d = sd_rounded_box(local, vec2<f32>(rect_w * 0.5, rect_h * 0.5), corner_r);
-    if d > 0.5 {
-      pixels[py * params.width + px] = pack_color(0.08, 0.08, 0.10, 1.0);
-      return;
-    }
-
-    // 6-color rotation
-    let phase = item_idx % 6u;
-    var cr = 0.0; var cg = 0.0; var cb = 0.0;
-    if phase == 0u { cr = 0.9; cg = 0.25; cb = 0.25; }
-    else if phase == 1u { cr = 0.2; cg = 0.75; cb = 0.3; }
-    else if phase == 2u { cr = 0.25; cg = 0.35; cb = 0.9; }
-    else if phase == 3u { cr = 0.95; cg = 0.7; cb = 0.1; }
-    else if phase == 4u { cr = 0.7; cg = 0.2; cb = 0.8; }
-    else { cr = 0.2; cg = 0.7; cb = 0.8; }
-
-    // AA edge
-    let aa = 1.0 - smoothstep(-1.0, 0.5, d);
-    cr = mix(0.08, cr, aa); cg = mix(0.08, cg, aa); cb = mix(0.10, cb, aa);
-
-    pixels[py * params.width + px] = pack_color(cr, cg, cb, 1.0);
-    return;
-  }
+  // ── Legacy path rendering (segments) ──
+  let max_cpx = f32(params.content_tiles_x * TILE_SIZE);
+  let max_cpy = f32(params.content_tiles_y * TILE_SIZE);
+  var content_px = f32(px);
+  var content_py = f32(py);
 
   if content_px >= max_cpx || content_py >= max_cpy {
     pixels[py * params.width + px] = pack_color(0.08, 0.08, 0.10, 1.0);
@@ -298,7 +195,7 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
 
   var color = vec3<f32>(0.08, 0.08, 0.10);
 
-  for (var si = 0u; si < params.shadow_count; si++) {
+  for (var si = 0u; si < 0u; si++) {  // shadows disabled (field repurposed for list_clip)
     let shadow = shadows[si];
     let sp = p - vec2<f32>(shadow.offset_x, shadow.offset_y);
     let d = sd_rounded_box(sp - shadow.center, shadow.half_size, shadow.corner_radius);
@@ -368,25 +265,42 @@ fn vs_fullscreen(@builtin(vertex_index) idx: u32) -> VSOut {
 
 @group(0) @binding(0) var<storage, read> render_pixels: array<u32>;
 @group(0) @binding(1) var<uniform>       render_params: Params;
+@group(2) @binding(0) var bg_texture: texture_2d<f32>;
+@group(2) @binding(1) var bg_sampler: sampler;
 
 fn scrollbar_sdf(px_pos: vec2<f32>, thumb_center: vec2<f32>, thumb_half: vec2<f32>, corner_r: f32) -> f32 {
   return sd_rounded_box(px_pos - thumb_center, thumb_half, corner_r);
 }
 
-// GPU glass: box blur from pixel buffer
-fn sample_px(x: i32, y: i32, w: u32, h: u32) -> vec3<f32> {
-  let cx = u32(clamp(x, 0, i32(w) - 1));
-  let cy = u32(clamp(y, 0, i32(h) - 1));
-  let p = render_pixels[cy * w + cx];
-  return vec3<f32>(f32(p & 0xFFu), f32((p >> 8u) & 0xFFu), f32((p >> 16u) & 0xFFu)) / 255.0;
+// GPU glass: box blur compositing bg_texture + content items
+fn sample_composited(cx: i32, cy: i32, content_w: u32, content_h: u32, vp_w: f32, vp_h: f32, scroll_x: f32, scroll_y: f32) -> vec3<f32> {
+  // Convert content coord to viewport UV for bg sampling
+  let vp_x = f32(cx) + scroll_x;
+  let vp_y = f32(cy) + scroll_y;
+  let bg_uv = vec2<f32>(vp_x / vp_w, vp_y / vp_h);
+  let bg = textureSampleLevel(bg_texture, bg_sampler, clamp(bg_uv, vec2(0.0), vec2(1.0)), 0.0);
+  var color = bg.xyz;
+
+  // Composite content item on top
+  let rx = u32(clamp(cx, 0, i32(content_w) - 1));
+  let ry = u32(clamp(cy, 0, i32(content_h) - 1));
+  if cx >= 0 && cy >= 0 && cx < i32(content_w) && cy < i32(content_h) {
+    let p = render_pixels[ry * content_w + rx];
+    let ir = f32(p & 0xFFu) / 255.0;
+    let ig = f32((p >> 8u) & 0xFFu) / 255.0;
+    let ib = f32((p >> 16u) & 0xFFu) / 255.0;
+    let ia = f32((p >> 24u) & 0xFFu) / 255.0;
+    color = mix(color, vec3(ir, ig, ib), ia);
+  }
+  return color;
 }
 
-fn blur_at(px: i32, py: i32, w: u32, h: u32, radius: i32) -> vec3<f32> {
+fn blur_at_composited(cx: i32, cy: i32, content_w: u32, content_h: u32, vp_w: f32, vp_h: f32, scroll_x: f32, scroll_y: f32, radius: i32) -> vec3<f32> {
   var sum = vec3<f32>(0.0);
   var n = 0.0;
-  for (var dy = -radius; dy <= radius; dy += 2) {
-    for (var dx = -radius; dx <= radius; dx += 2) {
-      sum += sample_px(px + dx, py + dy, w, h);
+  for (var dy = -radius; dy <= radius; dy += 3) {
+    for (var dx = -radius; dx <= radius; dx += 3) {
+      sum += sample_composited(cx + dx, cy + dy, content_w, content_h, vp_w, vp_h, scroll_x, scroll_y);
       n += 1.0;
     }
   }
@@ -399,16 +313,53 @@ fn fs_fullscreen(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
   let h = f32(render_params.height);
   let w_u = render_params.width;
   let h_u = render_params.height;
+  // Content buffer dimensions
+  let content_w = max(render_params.width, render_params.content_tiles_x * TILE_SIZE);
+  let content_h = max(render_params.height, render_params.content_tiles_y * TILE_SIZE);
+
+  // Viewport pixel position
   let px_u = u32(uv.x * w);
   let py_u = u32(uv.y * h);
+
+  // ── Background: texture sample at viewport UV (fixed, doesn't scroll) ──
+  let bg_sample = textureSample(bg_texture, bg_sampler, uv);
+  var r = bg_sample.x;
+  var g = bg_sample.y;
+  var b = bg_sample.z;
+
+  // Read items from viewport-sized pixel buffer (already scroll-positioned)
   let idx = py_u * w_u + px_u;
   let packed = render_pixels[idx];
-  var r = f32(packed & 0xFFu) / 255.0;
-  var g = f32((packed >> 8u) & 0xFFu) / 255.0;
-  var b = f32((packed >> 16u) & 0xFFu) / 255.0;
+  let item_r = f32(packed & 0xFFu) / 255.0;
+  let item_g = f32((packed >> 8u) & 0xFFu) / 255.0;
+  let item_b = f32((packed >> 16u) & 0xFFu) / 255.0;
+  let item_a = f32((packed >> 24u) & 0xFFu) / 255.0;
+  // Alpha composite: items over background
+  r = mix(r, item_r, item_a);
+  g = mix(g, item_g, item_a);
+  b = mix(b, item_b, item_a);
+
+  // ── Hover highlight (fragment, O(1)) ──
+  let hover_ri = i32(render_params.hover_item_idx);
+  if hover_ri >= 0 {
+    let ri_u = u32(hover_ri);
+    let hpos = render_items[ri_u * 3u];
+    let hmeta = render_items[ri_u * 3u + 2u];
+    let hx = hpos.x; let hy = hpos.y; let hw = hpos.z; let hh = hpos.w;
+    let hcr = hmeta.x;
+    if f32(px_u) >= hx && f32(px_u) < hx + hw && f32(py_u) >= hy && f32(py_u) < hy + hh {
+      let local_h = vec2<f32>(f32(px_u) - hx - hw * 0.5, f32(py_u) - hy - hh * 0.5);
+      let half_h = vec2<f32>(hw * 0.5, hh * 0.5);
+      let d_h = sd_rounded_box(local_h, half_h, hcr);
+      if d_h < 0.5 {
+        let aa_h = 1.0 - smoothstep(-1.0, 0.5, d_h);
+        r += aa_h * 0.06; g += aa_h * 0.06; b += aa_h * 0.06;
+      }
+    }
+  }
 
   // ── Mouse light (fragment shader — no compute re-run needed) ──
-  let mouse_pos = vec2<f32>(render_params.vlist_item_h, render_params.vlist_item_count);
+  let mouse_pos = vec2<f32>(render_params.mouse_x, render_params.mouse_y);
   if mouse_pos.x > 1.0 || mouse_pos.y > 1.0 {
     let dist = length(vec2<f32>(f32(px_u), f32(py_u)) - mouse_pos);
     let glow = exp(-dist * dist / (150.0 * 150.0 * 4.0));
@@ -420,47 +371,18 @@ fn fs_fullscreen(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
   let grain = fract(sin(dot(ns, vec2<f32>(12.9898, 78.233))) * 43758.5453);
   r += (grain - 0.5) * 0.015; g += (grain - 0.5) * 0.015; b += (grain - 0.5) * 0.015;
 
-  // ── Glass blur: items with opacity < 1.0 get backdrop blur ──
-  let ri_count = u32(render_items[2].w);
-  for (var ri = 0u; ri < min(ri_count, 256u); ri++) {
-    let pos = render_items[ri * 3u];
-    let col = render_items[ri * 3u + 1u];
-    let im = render_items[ri * 3u + 2u];
-    let opacity = im.y;
-
-    if opacity < 0.99 && opacity > 0.01 && col.w > 0.01 {
-      let ix = pos.x; let iy = pos.y; let iw = pos.z; let ih = pos.w;
-      let cr = im.x;
-
-      if f32(px_u) >= ix && f32(px_u) < ix + iw && f32(py_u) >= iy && f32(py_u) < iy + ih {
-        let local = vec2<f32>(f32(px_u) - ix - iw * 0.5, f32(py_u) - iy - ih * 0.5);
-        let half_sz = vec2<f32>(iw * 0.5, ih * 0.5);
-        let d = sd_rounded_box(local, half_sz, cr);
-
-        if d < 0.5 {
-          let aa = 1.0 - smoothstep(-1.0, 0.5, d);
-          let blurred = blur_at(i32(px_u), i32(py_u), w_u, h_u, 10);
-          let tinted = mix(blurred, col.xyz, 0.2);
-          r = mix(r, tinted.x, aa * opacity);
-          g = mix(g, tinted.y, aa * opacity);
-          b = mix(b, tinted.z, aa * opacity);
-        }
-      }
-    }
-  }
+  // ── Glass blur: disabled for now (TODO: optimize with mip chain) ──
 
   let px_x = uv.x * w;
   let px_y = uv.y * h;
 
   // ── Vertical scrollbar (Cupertino-style: thin → thick on hover) ──
-  let content_h = select(f32(render_params.content_tiles_y * TILE_SIZE),
-                         render_params.vlist_item_h * render_params.vlist_item_count,
-                         render_params.vlist_item_h > 0.5);
-  if content_h > h && render_params.scrollbar_opacity_y > 0.01 {
+  let scroll_content_h = f32(render_params.content_tiles_y * TILE_SIZE);
+  if scroll_content_h > h && render_params.scrollbar_opacity_y > 0.01 {
     let bar_w = mix(6.0, 10.0, render_params.scrollbar_hover_y);
     let margin = mix(3.0, 4.0, render_params.scrollbar_hover_y);
-    let thumb_h = max(36.0, h * h / content_h);
-    let scroll_range = content_h - h;
+    let thumb_h = max(36.0, h * h / scroll_content_h);
+    let scroll_range = scroll_content_h - h;
     let scroll_frac = clamp(-render_params.scroll_y / scroll_range, 0.0, 1.0);
     let thumb_y = scroll_frac * (h - thumb_h);
 
@@ -474,12 +396,12 @@ fn fs_fullscreen(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
   }
 
   // ── Horizontal scrollbar ──
-  let content_w = f32(render_params.content_tiles_x * TILE_SIZE);
-  if content_w > w && render_params.scrollbar_opacity_x > 0.01 {
+  let scroll_content_w = f32(render_params.content_tiles_x * TILE_SIZE);
+  if scroll_content_w > w && render_params.scrollbar_opacity_x > 0.01 {
     let bar_h = mix(6.0, 10.0, render_params.scrollbar_hover_x);
     let margin_x = mix(3.0, 4.0, render_params.scrollbar_hover_x);
-    let thumb_w = max(36.0, w * w / content_w);
-    let scroll_range_x = content_w - w;
+    let thumb_w = max(36.0, w * w / scroll_content_w);
+    let scroll_range_x = scroll_content_w - w;
     let scroll_frac_x = clamp(-render_params.scroll_x / scroll_range_x, 0.0, 1.0);
     let thumb_x = scroll_frac_x * (w - thumb_w);
 

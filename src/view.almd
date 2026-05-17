@@ -16,6 +16,9 @@ type Style = {
   mt: Float, mr: Float, mb: Float, ml: Float,
   grow: Float, shrink: Float, gap: Float,
   justify: Int, align: Int,
+  position: Int,
+  pos_top: Float, pos_right: Float, pos_bottom: Float, pos_left: Float,
+  width_pct: Float, height_pct: Float,
   bg: Color, fg: Color,
   rounded: Float, opacity: Float, scale: Float,
   font_size: Float, bold: Int, strikethrough: Int, selectable: Int,
@@ -25,6 +28,7 @@ let TEXT = 0
 let BOX = 1
 let ROW = 2
 let COL = 3
+let LIST = 4
 
 let _transparent = { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }
 let _white = { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }
@@ -34,6 +38,9 @@ let _default: Style = {
   mt: 0.0, mr: 0.0, mb: 0.0, ml: 0.0,
   grow: 0.0, shrink: 0.0, gap: 0.0,
   justify: 0, align: 0,
+  position: 0,
+  pos_top: -1.0, pos_right: -1.0, pos_bottom: -1.0, pos_left: -1.0,
+  width_pct: -1.0, height_pct: -1.0,
   bg: _transparent, fg: _white,
   rounded: 0.0, opacity: 1.0, scale: 1.0,
   font_size: 14.0, bold: 0, strikethrough: 0, selectable: 1,
@@ -46,6 +53,7 @@ type View = {
   _style: Style,
   _on_click: Int,
   _key: Int,
+  _item_height: Float,
 }
 
 // ── Colors (public) ──
@@ -60,13 +68,17 @@ let black = rgb(0.0, 0.0, 0.0)
 // ── Constructors ──
 
 fn text(content: String) -> View =
-  { _kind: TEXT, _children: [], _content: content, _style: _default, _on_click: 0, _key: 0 }
+  { _kind: TEXT, _children: [], _content: content, _style: _default, _on_click: 0, _key: 0, _item_height: 0.0 }
 
 fn col(children: List[View]) -> View =
-  { _kind: COL, _children: children, _content: "", _style: _default, _on_click: 0, _key: 0 }
+  { _kind: COL, _children: children, _content: "", _style: _default, _on_click: 0, _key: 0, _item_height: 0.0 }
 
 fn row(children: List[View]) -> View =
-  { _kind: ROW, _children: children, _content: "", _style: _default, _on_click: 0, _key: 0 }
+  { _kind: ROW, _children: children, _content: "", _style: _default, _on_click: 0, _key: 0, _item_height: 0.0 }
+
+// Virtual list: only renders visible items. Fixed item height for O(1) scroll.
+fn list(children: List[View], item_height: Float) -> View =
+  { _kind: LIST, _children: children, _content: "", _style: _default, _on_click: 0, _key: 0, _item_height: item_height }
 
 // ── Layout modifiers ──
 
@@ -93,6 +105,57 @@ fn w(v: View, width: Float) -> View =
 
 fn h(v: View, height: Float) -> View =
   { ...v, _style: { ...v._style, height: height } }
+
+fn mx(v: View, horizontal: Float) -> View =
+  { ...v, _style: { ...v._style, ml: horizontal, mr: horizontal } }
+
+fn my(v: View, vertical: Float) -> View =
+  { ...v, _style: { ...v._style, mt: vertical, mb: vertical } }
+
+fn w_pct(v: View, pct: Float) -> View =
+  { ...v, _style: { ...v._style, width_pct: pct } }
+
+fn h_pct(v: View, pct: Float) -> View =
+  { ...v, _style: { ...v._style, height_pct: pct } }
+
+// ── Position modifiers ──
+
+fn absolute(v: View) -> View =
+  { ...v, _style: { ...v._style, position: 1 } }
+
+fn pos_top(v: View, t: Float) -> View =
+  { ...v, _style: { ...v._style, pos_top: t } }
+
+fn pos_bottom(v: View, b: Float) -> View =
+  { ...v, _style: { ...v._style, pos_bottom: b } }
+
+fn pos_left(v: View, l: Float) -> View =
+  { ...v, _style: { ...v._style, pos_left: l } }
+
+fn pos_right(v: View, r: Float) -> View =
+  { ...v, _style: { ...v._style, pos_right: r } }
+
+// ── Justify / Align modifiers ──
+
+fn justify(v: View, j: Int) -> View =
+  { ...v, _style: { ...v._style, justify: j } }
+
+fn align(v: View, a: Int) -> View =
+  { ...v, _style: { ...v._style, align: a } }
+
+// Justify constants (match layout.almd)
+let JUSTIFY_START = 0
+let JUSTIFY_END = 1
+let JUSTIFY_CENTER = 2
+let JUSTIFY_BETWEEN = 3
+let JUSTIFY_AROUND = 4
+let JUSTIFY_EVENLY = 5
+
+// Align constants
+let ALIGN_START = 0
+let ALIGN_END = 1
+let ALIGN_CENTER = 2
+let ALIGN_STRETCH = 3
 
 // ── Paint modifiers ──
 
@@ -149,7 +212,11 @@ fn layout_changed(a: Style, b: Style) -> Bool =
   a.pt != b.pt or a.pr != b.pr or a.pb != b.pb or a.pl != b.pl or
   a.mt != b.mt or a.mr != b.mr or a.mb != b.mb or a.ml != b.ml or
   a.grow != b.grow or a.shrink != b.shrink or a.gap != b.gap or
-  a.justify != b.justify or a.align != b.align
+  a.justify != b.justify or a.align != b.align or
+  a.position != b.position or
+  a.pos_top != b.pos_top or a.pos_right != b.pos_right or
+  a.pos_bottom != b.pos_bottom or a.pos_left != b.pos_left or
+  a.width_pct != b.width_pct or a.height_pct != b.height_pct
 
 fn paint_changed(a: Style, b: Style) -> Bool =
   a.bg != b.bg or a.fg != b.fg or

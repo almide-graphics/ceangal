@@ -1,55 +1,45 @@
-// ceangal — UI framework for Almide
+// ceangal v2 — UI framework for Almide
 //
-// Orchestration layer: scene lifecycle, scroll API exports, DOM overlay.
-// Rendering via snaidhm, scroll physics via self.scroll.
+// Architecture:
+//   State change (rare): app() → layout → upload items → GPU
+//   Scroll (60fps): write scroll_y → GPU compute+render (NO tree ops)
 
 import self.dom as dom
-import self.layout as layout
 import self.scroll as sc
-import self.virtual_list as vlist
+import self.view as v
 import self.todoapp as td
 import self.render as render
 import self.cell as cl
 import snaidhm
 import snaidhm.web.gpu as gpu
-import snaidhm.ttf as ttf
 
-// ── Scene cache ──
+// ══════════════════════════════════════════════════════════════
+// State
+// ══════════════════════════════════════════════════════════════
 
 var cached_scene: snaidhm.SceneHandle = {
   device: 0, width: 0, height: 0, viewport_tiles_x: 0, viewport_tiles_y: 0,
-  params_buf: 0, regions_buf: 0, pixel_buf: 0,
-  items_buf: 0,
+  content_tiles_x: 0, content_tiles_y: 0,
+  params_buf: 0, regions_buf: 0, pixel_buf: 0, items_buf: 0,
   compute_pipeline: 0, compute_bg: 0, compute_regions_bg: 0,
-  quad_pipeline: 0, quad_bg: 0, quad_regions_bg: 0,
-  img_pipeline: 0, img_bg: 0,
-  img_vtx: 0, img_idx: 0, img_count: 0, format: 0,
+  quad_pipeline: 0, quad_bg: 0, quad_regions_bg: 0, quad_bg_tex: 0,
+  img_pipeline: 0, img_bg: 0, img_vtx: 0, img_idx: 0, img_count: 0, format: 0,
 }
 var scene_ready = false
-var app_initialized = false
 var viewport_w = 0.0
 var viewport_h = 0.0
 var root_region = 0
-var focused_region = 0
+var cached_items: List[render.RenderItem] = []
 
-// Pre-allocated region upload lists (avoid per-frame allocation)
-var rgn_bx: List[Float] = list.repeat(0.0, 8)
-var rgn_by: List[Float] = list.repeat(0.0, 8)
-var rgn_bw: List[Float] = list.repeat(0.0, 8)
-var rgn_bh: List[Float] = list.repeat(0.0, 8)
-var rgn_sx: List[Float] = list.repeat(0.0, 8)
-var rgn_sy: List[Float] = list.repeat(0.0, 8)
-var rgn_cw: List[Float] = list.repeat(0.0, 8)
-var rgn_ch: List[Float] = list.repeat(0.0, 8)
-var rgn_pa: List[Int] = list.repeat(0 - 1, 8)
-var rgn_boy: List[Float] = list.repeat(0.0, 8)
-var rgn_box: List[Float] = list.repeat(0.0, 8)
+// ══════════════════════════════════════════════════════════════
+// Upload items (ONLY on state change — never during scroll)
+// ══════════════════════════════════════════════════════════════
 
-// ── Render items upload ──
+fn dpr() -> Float = int.to_float(cached_scene.height) / viewport_h
 
-fn upload_render_items(vw: Float, vh: Float) -> Unit = {
+fn rebuild_and_upload() -> Unit = {
   let view = td.app()
-  let items = render.render(view, vw, vh)
+  let items = render.render_at(view, viewport_w, viewport_h, 0.0)
   cached_items = items
   let count = list.len(items)
   let s = dpr()
@@ -63,6 +53,7 @@ fn upload_render_items(vw: Float, vh: Float) -> Unit = {
   var bg_as: List[Float] = []
   var roundeds: List[Float] = []
   var opacities: List[Float] = []
+  var scrollables: List[Float] = []
   for item in items {
     xs = xs + [item.x * s]
     ys = ys + [item.y * s]
@@ -74,248 +65,141 @@ fn upload_render_items(vw: Float, vh: Float) -> Unit = {
     bg_as = bg_as + [item.bg_a]
     roundeds = roundeds + [item.rounded * s]
     opacities = opacities + [item.opacity]
+    scrollables = scrollables + [int.to_float(item.scrollable)]
   }
-  snaidhm.upload_items(cached_scene, count, xs, ys, ws, hs, bg_rs, bg_gs, bg_bs, bg_as, roundeds, opacities)
-}
+  snaidhm.upload_items(cached_scene, count, xs, ys, ws, hs, bg_rs, bg_gs, bg_bs, bg_as, roundeds, opacities, scrollables)
 
-// ── Drawing ──
-
-fn dpr() -> Float = int.to_float(cached_scene.height) / viewport_h
-
-fn draw_at_scroll() -> Unit = {
-  if scene_ready then {
-    let s = dpr()
-    let ry = sc.ax(root_region, sc.AXIS_Y)
-    let rx = sc.ax(root_region, sc.AXIS_X)
-
-    // Upload region scroll data (using pre-allocated lists)
-    for i in 0..sc.region_count {
-      rgn_bx[i] = sc.rgn_bounds_x[i] * s
-      rgn_by[i] = sc.rgn_bounds_y[i] * s
-      rgn_bw[i] = sc.rgn_bounds_w[i] * s
-      rgn_bh[i] = sc.rgn_bounds_h[i] * s
-      rgn_sx[i] = sc.ax_pos[sc.ax(i, sc.AXIS_X)] * s
-      rgn_sy[i] = sc.ax_pos[sc.ax(i, sc.AXIS_Y)] * s
-      rgn_cw[i] = sc.rgn_content_w[i] * s
-      rgn_ch[i] = sc.rgn_content_h[i] * s
-      rgn_pa[i] = sc.rgn_parent[i]
-      rgn_boy[i] = sc.ax_bar_opacity[sc.ax(i, sc.AXIS_Y)]
-      rgn_box[i] = sc.ax_bar_opacity[sc.ax(i, sc.AXIS_X)]
-    }
-    snaidhm.upload_regions(cached_scene, sc.region_count, rgn_bx, rgn_by, rgn_bw, rgn_bh, rgn_sx, rgn_sy, rgn_cw, rgn_ch, rgn_pa, rgn_boy, rgn_box)
-
-    // Write mouse position for GPU light effect (repurpose vlist slots)
-    gpu.write_f32_at(cached_scene.device, cached_scene.params_buf, 56, mouse_phys_x)
-    gpu.write_f32_at(cached_scene.device, cached_scene.params_buf, 60, mouse_phys_y)
-
-    snaidhm.draw_frame_2d(cached_scene,
-      sc.ax_pos[rx] * s, sc.ax_pos[ry] * s,
-      sc.ax_bar_opacity[ry], sc.ax_bar_opacity[rx],
-      sc.ax_bar_hover[ry], sc.ax_bar_hover[rx])
+  // Update scroll bounds
+  let content_h = render.list_content_height(view)
+  if render.list_frame_height > 0.0 then {
+    sc.set_viewport_height(root_region, render.list_frame_height)
+    if content_h > 0.0 then {
+      sc.set_content_height(root_region, content_h)
+    } else ()
+    // Write clip bounds to GPU
+    let clip_top = render.list_frame_y * s
+    let clip_bottom = (render.list_frame_y + render.list_frame_height) * s
+    gpu.write_f32_at(cached_scene.device, cached_scene.params_buf, 20, clip_top)
+    gpu.write_f32_at(cached_scene.device, cached_scene.params_buf, 24, clip_bottom)
   } else ()
 }
 
-// ── Prepare ──
+// ══════════════════════════════════════════════════════════════
+// Draw (scroll hot path — NO allocations, NO tree ops)
+// ══════════════════════════════════════════════════════════════
 
-// Internal: prepare GPU scene from virtual list window
+fn draw() -> Unit = {
+  if scene_ready then {
+    let s = dpr()
+    let ry = sc.ax(root_region, sc.AXIS_Y)
+    snaidhm.draw_frame_2d(cached_scene,
+      0.0, sc.ax_pos[ry] * s,
+      sc.ax_bar_opacity[ry], 0.0, 0.0, 0.0)
+  } else ()
+}
+
+// ══════════════════════════════════════════════════════════════
+// Exports: Scene lifecycle
+// ══════════════════════════════════════════════════════════════
+
+type SceneData = {
+  cubics: List[snaidhm.Cubic],
+  paints: List[snaidhm.Paint],
+  shadows: List[snaidhm.Shadow],
+}
+
+fn build_empty_scene() -> SceneData = {
+  let shadows = [snaidhm.rect_shadow(99.0, 99.0, 0.01, 0.01, 0.0, 0.0, 0.0, 0.001, [0.0,0.0,0.0,0.0])]
+  let paints = [snaidhm.solid(0.0, 0.0, 0.0, 0.0)]
+  { cubics: [], paints: paints, shadows: shadows }
+}
+
 @export(wasm, "prepare_scene")
 fn do_prepare(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int,
-              img_vtx: Int, img_idx: Int, img_count: Int, img_texture: Int, img_sampler: Int) -> Unit = {
-  let vw = int.to_float(css_w)
-  let vh = int.to_float(css_h)
-  viewport_w = vw
-  viewport_h = vh
+              img_vtx: Int, img_idx: Int, img_count: Int, img_texture: Int, img_sampler: Int,
+              bg_texture: Int, bg_sampler: Int) -> Unit = {
+  viewport_w = int.to_float(css_w)
+  viewport_h = int.to_float(css_h)
 
-  // Prepare empty scene (virtual list items rendered procedurally in WGSL)
-  let data = build_empty_scene(vw, vh)
-  let d = int.to_float(phys_h) / vh
+  let data = build_empty_scene()
   cached_scene = snaidhm.prepare_scene(device, phys_w, phys_h, phys_w, phys_h,
     data.cubics, data.shadows, data.paints,
-    img_vtx, img_idx, img_count, img_texture, img_sampler)
+    img_vtx, img_idx, img_count, img_texture, img_sampler,
+    bg_texture, bg_sampler)
   scene_ready = true
 
-  upload_render_items(vw, vh)
-
-  // Init virtual list (disabled, using todo app)
-  vlist.init(0, 0.0, vw, vh)
-
-  // Scroll setup
+  // Init scroll
   sc.reset_all()
-  root_region = sc.create_region(vw, vlist.content_height(), vw, vh, 0 - 1)
-  focused_region = root_region
+  root_region = sc.create_region(viewport_w, viewport_h, viewport_w, viewport_h, 0 - 1)
 
-  draw_at_scroll()
+  draw()
 }
 
-// ── Scroll position accessor ──
-
-@export(wasm, "get_scroll_pos")
-fn get_scroll_pos(region: Int, axis: Int) -> Float = sc.get_pos(region, axis)
-
-// ── Unified hit test ──
-// Returns type * 256 + region_id
-// Types: 0=none, 1=region, 2=thumb_y, 3=thumb_x, 4=track_y, 5=track_x
-
-@export(wasm, "hit_test")
-fn do_hit_test(x: Float, y: Float) -> Int = sc.full_hit_test(x, y)
-
-@export(wasm, "scrollbar_drag_to")
-fn do_scrollbar_drag_to(region: Int, axis: Int, screen_pos: Float) -> Unit = {
-  sc.scrollbar_drag_to(region, axis, screen_pos)
-  draw_at_scroll()
-}
-
-@export(wasm, "track_tap_at")
-fn do_track_tap_at(region: Int, axis: Int, screen_pos: Float) -> Unit = {
-  sc.track_tap_at(region, axis, screen_pos)
-  draw_at_scroll()
-}
-
-// ── Scroll event exports ──
-
-@export(wasm, "scroll_wheel")
-fn scroll_wheel(region: Int, dx: Float, dy: Float) -> Unit = {
-  sc.route_wheel(region, dx, dy)
-  draw_at_scroll()
-}
-
-@export(wasm, "scroll_drag")
-fn scroll_drag(region: Int, dy: Float) -> Unit = {
-  sc.route_drag(region, dy)
-  draw_at_scroll()
-}
-
-@export(wasm, "scroll_release")
-fn scroll_release(region: Int, vel: Float) -> Unit = sc.route_release(region, vel)
+// ══════════════════════════════════════════════════════════════
+// Exports: Scroll (hot path — physics only)
+// ══════════════════════════════════════════════════════════════
 
 @export(wasm, "scroll_tick")
 fn scroll_tick(dt: Float) -> Int = {
   let running = sc.tick_all(dt)
-  draw_at_scroll()
+  draw()
   running
 }
 
-// ── Scrollbar exports (any region by ID) ──
+@export(wasm, "scroll_wheel")
+fn scroll_wheel(region: Int, dx: Float, dy: Float) -> Unit =
+  sc.route_wheel(region, dx, dy)
 
-@export(wasm, "scrollbar_region_thumb_y")
-fn scrollbar_region_thumb_y(region: Int) -> Float = {
-  let t = sc.thumb_info(sc.ax(region, sc.AXIS_Y), sc.rgn_bounds_h[region], sc.rgn_content_h[region])
-  t.pos
+@export(wasm, "get_scroll_pos")
+fn get_scroll_pos(region: Int, axis: Int) -> Float = sc.get_pos(region, axis)
+
+// ══════════════════════════════════════════════════════════════
+// Exports: Test helpers
+// ══════════════════════════════════════════════════════════════
+
+@export(wasm, "set_viewport")
+fn set_viewport(w: Float, h: Float) -> Unit = {
+  viewport_w = w
+  viewport_h = h
 }
 
-@export(wasm, "scrollbar_region_height_y")
-fn scrollbar_region_height_y(region: Int) -> Float = {
-  let t = sc.thumb_info(sc.ax(region, sc.AXIS_Y), sc.rgn_bounds_h[region], sc.rgn_content_h[region])
-  t.size
+
+// ══════════════════════════════════════════════════════════════
+// Exports: State change (triggers rebuild)
+// ══════════════════════════════════════════════════════════════
+
+@export(wasm, "todo_init_data")
+fn todo_init_data() -> Unit = {
+  td.add_todo("Buy milk")
+  td.add_todo("Write docs")
+  rebuild_and_upload()
+  draw()
 }
 
-@export(wasm, "scrollbar_region_set_frac_y")
-fn scrollbar_region_set_frac_y(region: Int, frac: Float) -> Unit = {
-  sc.set_scrollbar_frac(sc.ax(region, sc.AXIS_Y), frac, sc.rgn_content_h[region], sc.rgn_bounds_h[region])
-  draw_at_scroll()
+@export(wasm, "todo_add")
+fn todo_add() -> Unit = {
+  let idx = td.next_id.get()
+  td.add_todo("Item " + int.to_string(idx))
+  rebuild_and_upload()
+  draw()
 }
 
-@export(wasm, "region_count")
-fn get_region_count() -> Int = sc.region_count
-
-// Region bounds in CSS px (for JS hit test)
-@export(wasm, "region_screen_x")
-fn region_screen_x(region: Int) -> Float = sc.rgn_bounds_x[region] + sc.ax_pos[sc.ax(sc.rgn_parent[region], sc.AXIS_X)]
-@export(wasm, "region_screen_y")
-fn region_screen_y(region: Int) -> Float = sc.rgn_bounds_y[region] + sc.ax_pos[sc.ax(sc.rgn_parent[region], sc.AXIS_Y)]
-@export(wasm, "region_w")
-fn region_w(region: Int) -> Float = sc.rgn_bounds_w[region]
-@export(wasm, "region_h")
-fn region_h(region: Int) -> Float = sc.rgn_bounds_h[region]
-
-// ── Root scrollbar exports (convenience) ──
-
-@export(wasm, "scrollbar_info_y")
-fn scrollbar_info_y() -> Float = {
-  let t = sc.thumb_info(sc.ax(root_region, sc.AXIS_Y), viewport_h, sc.rgn_content_h[root_region])
-  t.pos
+@export(wasm, "todo_toggle")
+fn todo_toggle(id: Int) -> Unit = {
+  td.toggle_todo(id)
+  rebuild_and_upload()
+  draw()
 }
 
-@export(wasm, "scrollbar_height_y")
-fn scrollbar_height_y() -> Float = {
-  let t = sc.thumb_info(sc.ax(root_region, sc.AXIS_Y), viewport_h, sc.rgn_content_h[root_region])
-  t.size
+// ══════════════════════════════════════════════════════════════
+// Exports: Item accessors (for DOM overlay)
+// ══════════════════════════════════════════════════════════════
+
+fn s(text: String) -> Int = {
+  dom.begin_str()
+  for b in string.to_bytes(text) { dom.push_byte(b) }
+  dom.commit_str()
 }
-
-@export(wasm, "scrollbar_set_frac_y")
-fn scrollbar_set_frac_y(frac: Float) -> Unit = {
-  sc.set_scrollbar_frac(sc.ax(root_region, sc.AXIS_Y), frac, sc.rgn_content_h[root_region], viewport_h)
-  draw_at_scroll()
-}
-
-@export(wasm, "scrollbar_info_x")
-fn scrollbar_info_x() -> Float = {
-  let t = sc.thumb_info(sc.ax(root_region, sc.AXIS_X), viewport_w, sc.rgn_content_w[root_region])
-  t.pos
-}
-
-@export(wasm, "scrollbar_width_x")
-fn scrollbar_width_x() -> Float = {
-  let t = sc.thumb_info(sc.ax(root_region, sc.AXIS_X), viewport_w, sc.rgn_content_w[root_region])
-  t.size
-}
-
-@export(wasm, "scrollbar_set_frac_x")
-fn scrollbar_set_frac_x(frac: Float) -> Unit = {
-  sc.set_scrollbar_frac(sc.ax(root_region, sc.AXIS_X), frac, sc.rgn_content_w[root_region], viewport_w)
-  draw_at_scroll()
-}
-
-@export(wasm, "scrollbar_set_hover_y")
-fn scrollbar_set_hover_y(h: Float) -> Unit = {
-  sc.set_hover(root_region, sc.AXIS_Y, h)
-  draw_at_scroll()
-}
-
-@export(wasm, "scrollbar_set_hover_x")
-fn scrollbar_set_hover_x(h: Float) -> Unit = {
-  sc.set_hover(root_region, sc.AXIS_X, h)
-  draw_at_scroll()
-}
-
-@export(wasm, "scrollbar_track_tap_y")
-fn scrollbar_track_tap_y(click_y: Float) -> Unit = {
-  sc.track_tap(sc.ax(root_region, sc.AXIS_Y), click_y, viewport_h, sc.rgn_content_h[root_region])
-  draw_at_scroll()
-}
-
-@export(wasm, "scrollbar_track_tap_x")
-fn scrollbar_track_tap_x(click_x: Float) -> Unit = {
-  sc.track_tap(sc.ax(root_region, sc.AXIS_X), click_x, viewport_w, sc.rgn_content_w[root_region])
-  draw_at_scroll()
-}
-
-// ── Keyboard scroll ──
-
-@export(wasm, "scroll_key")
-fn scroll_key(key: Int) -> Unit = {
-  let line = 40.0
-  let page = viewport_h * 0.85
-  let r = focused_region
-  if key == 0 then sc.route_wheel(r, 0.0, line)
-  else if key == 1 then sc.route_wheel(r, 0.0, 0.0 - line)
-  else if key == 2 then sc.route_wheel(r, line, 0.0)
-  else if key == 3 then sc.route_wheel(r, 0.0 - line, 0.0)
-  else if key == 4 then sc.route_wheel(r, 0.0, page)
-  else if key == 5 then sc.route_wheel(r, 0.0, 0.0 - page)
-  else if key == 6 then {
-    sc.set_scrollbar_frac(sc.ax(r, sc.AXIS_Y), 0.0, sc.rgn_content_h[r], viewport_h)
-  }
-  else if key == 7 then {
-    sc.set_scrollbar_frac(sc.ax(r, sc.AXIS_Y), 1.0, sc.rgn_content_h[r], viewport_h)
-  }
-  else ()
-  draw_at_scroll()
-}
-
-// ── Render items query (for JS DOM text overlay) ──
-
-var cached_items: List[render.RenderItem] = []
 
 @export(wasm, "get_item_count")
 fn get_item_count() -> Int = list.len(cached_items)
@@ -336,9 +220,7 @@ fn get_item_h(i: Int) -> Float = cached_items[i].h
 fn get_item_kind(i: Int) -> Int = cached_items[i].kind
 
 @export(wasm, "get_item_text")
-fn get_item_text(i: Int) -> Int = {
-  s(cached_items[i].content)
-}
+fn get_item_text(i: Int) -> Int = s(cached_items[i].content)
 
 @export(wasm, "get_item_font_size")
 fn get_item_font_size(i: Int) -> Float = cached_items[i].font_size
@@ -346,168 +228,48 @@ fn get_item_font_size(i: Int) -> Float = cached_items[i].font_size
 @export(wasm, "get_item_selectable")
 fn get_item_selectable(i: Int) -> Int = cached_items[i].selectable
 
-// ── Todo actions (called from JS) ──
+@export(wasm, "get_item_scrollable")
+fn get_item_scrollable(i: Int) -> Int = cached_items[i].scrollable
 
-var hover_idx = 0 - 1
+@export(wasm, "get_list_frame_y")
+fn get_list_frame_y() -> Float = render.list_frame_y
 
-var mouse_phys_x = 0.0
-var mouse_phys_y = 0.0
+@export(wasm, "get_list_frame_h")
+fn get_list_frame_h() -> Float = render.list_frame_height
 
-@export(wasm, "set_mouse_light")
-fn set_mouse_light(phys_x: Float, phys_y: Float) -> Unit = {
-  mouse_phys_x = phys_x
-  mouse_phys_y = phys_y
-  // Fragment-only: update params + render pass only (no compute re-run)
-  if scene_ready then {
-    gpu.write_f32_at(cached_scene.device, cached_scene.params_buf, 56, phys_x)
-    gpu.write_f32_at(cached_scene.device, cached_scene.params_buf, 60, phys_y)
-    snaidhm.draw_render_only(cached_scene)
-  } else ()
-}
+// ══════════════════════════════════════════════════════════════
+// Exports: Click handling
+// ══════════════════════════════════════════════════════════════
 
-@export(wasm, "set_hover")
-fn set_hover(mouse_x: Float, mouse_y: Float) -> Unit = {
-  var found = 0 - 1
-  for i in 0..list.len(cached_items) {
-    let item = cached_items[i]
-    if item.bg_a > 0.01 and item.kind != 0 and
-       mouse_x >= item.x and mouse_x < item.x + item.w and
-       mouse_y >= item.y and mouse_y < item.y + item.h then {
-      found = i
-    } else ()
-  }
-  if found != hover_idx then {
-    hover_idx = found
-    upload_with_hover()
-    draw_at_scroll()
-  } else ()
-}
-
-fn upload_with_hover() -> Unit = {
-  let count = list.len(cached_items)
-  let s = dpr()
-  var xs: List[Float] = []
-  var ys: List[Float] = []
-  var ws: List[Float] = []
-  var hs: List[Float] = []
-  var brs: List[Float] = []
-  var bgs: List[Float] = []
-  var bbs: List[Float] = []
-  var bas: List[Float] = []
-  var rds: List[Float] = []
-  var ops: List[Float] = []
-  for i in 0..count {
-    let item = cached_items[i]
-    let h = i == hover_idx
-    xs = xs + [item.x * s]
-    ys = ys + [item.y * s]
-    ws = ws + [item.w * s]
-    hs = hs + [item.h * s]
-    brs = brs + [if h then float.min(1.0, item.bg_r + 0.08) else item.bg_r]
-    bgs = bgs + [if h then float.min(1.0, item.bg_g + 0.08) else item.bg_g]
-    bbs = bbs + [if h then float.min(1.0, item.bg_b + 0.08) else item.bg_b]
-    bas = bas + [item.bg_a]
-    rds = rds + [item.rounded * s]
-    ops = ops + [item.opacity]
-  }
-  snaidhm.upload_items(cached_scene, count, xs, ys, ws, hs, brs, bgs, bbs, bas, rds, ops)
-}
-
-@export(wasm, "todo_init_data")
-fn todo_init_data() -> Unit = {
-  td.add_todo("Buy milk")
-  td.add_todo("Write docs")
-}
-
-@export(wasm, "todo_add")
-fn todo_add() -> Unit = {
-  td.add_todo("New item")
-  upload_render_items(viewport_w, viewport_h)
-  draw_at_scroll()
-}
-
-@export(wasm, "todo_toggle")
-fn todo_toggle(id: Int) -> Unit = {
-  td.toggle_todo(id)
-  upload_render_items(viewport_w, viewport_h)
-  draw_at_scroll()
-}
-
-// Click handler: simple — check items by position, return todo index or -1
 @export(wasm, "handle_click")
 fn handle_click(click_x: Float, click_y: Float) -> Int = {
+  // click is in viewport coords; list items need scroll offset for hit test
+  let scroll_y = sc.get_pos(root_region, sc.AXIS_Y)
   var result = 0 - 1
   let todos_list = td.todos.get()
   var todo_idx = 0
   for i in 0..list.len(cached_items) {
     let item = cached_items[i]
-    if item.kind == 2 and item.bg_a > 0.01 then {
-      if click_x >= item.x and click_x < item.x + item.w and
-         click_y >= item.y and click_y < item.y + item.h and
-         todo_idx < list.len(todos_list) then {
+    let item_y = if item.scrollable == 1 then item.y + scroll_y else item.y
+    if click_x >= item.x and click_x < item.x + item.w and
+       click_y >= item_y and click_y < item_y + item.h then {
+      if item.kind == 2 and item.bg_a > 0.01 and todo_idx < list.len(todos_list) then {
         result = todos_list[todo_idx].id
       } else ()
+      if item.kind == 0 and item.content == "+ Add (Enter)" then {
+        result = 0 - 2
+      } else ()
+    } else ()
+    if item.kind == 2 and item.bg_a > 0.01 then {
       todo_idx = todo_idx + 1
     } else ()
   }
   result
 }
 
-// ── Legacy ──
-
-@export(wasm, "render_scene")
-fn do_render(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int,
-             img_vtx: Int, img_idx: Int, img_count: Int, img_texture: Int, img_sampler: Int) -> Unit =
-  do_prepare(device, css_w, css_h, phys_w, phys_h, img_vtx, img_idx, img_count, img_texture, img_sampler)
-
 // ══════════════════════════════════════════════════════════════
-// Test scene: 1000-item virtual list
+// Exports: Hit test (for scroll regions)
 // ══════════════════════════════════════════════════════════════
 
-let VLIST_COUNT = 1000
-let VLIST_ITEM_H = 50.0  // CSS px per item
-
-type SceneData = {
-  cubics: List[snaidhm.Cubic],
-  paints: List[snaidhm.Paint],
-  shadows: List[snaidhm.Shadow],
-  content_w: Float,
-  content_h: Float,
-}
-
-// Empty scene — virtual list items are rendered procedurally in WGSL
-fn build_empty_scene(vw: Float, vh: Float) -> SceneData = {
-  let shadows = [snaidhm.rect_shadow(99.0, 99.0, 0.01, 0.01, 0.0, 0.0, 0.0, 0.001, [0.0,0.0,0.0,0.0])]
-  let paints = [snaidhm.solid(0.0, 0.0, 0.0, 0.0)]  // dummy (GPU requires non-zero buffer)
-  { cubics: [], paints: paints, shadows: shadows, content_w: vw, content_h: vh }
-}
-
-// ── DOM (dormant) ──
-
-fn s(text: String) -> Int = {
-  dom.begin_str()
-  for b in string.to_bytes(text) { dom.push_byte(b) }
-  dom.commit_str()
-}
-
-fn float_to_px(v: Float) -> Int = {
-  let whole = float.to_int(v)
-  let frac = float.to_int((v - int.to_float(whole)) * 10.0)
-  dom.begin_str()
-  for b in string.to_bytes(int.to_string(whole)) { dom.push_byte(b) }
-  dom.push_byte(46)
-  for b in string.to_bytes(int.to_string(int.abs(frac))) { dom.push_byte(b) }
-  dom.push_byte(112) dom.push_byte(120)
-  dom.commit_str()
-}
-
-type TextEntry = { rect_idx: Int, chars: List[Int], font_size: Float, color: List[Float], align: Int }
-
-@export(wasm, "init_overlay")
-fn init_overlay(overlay: Int, canvas_w: Int, canvas_h: Int) -> Unit = ()
-@export(wasm, "textarea_x")
-fn textarea_x(vw: Int, vh: Int) -> Float = 0.0
-@export(wasm, "textarea_y")
-fn textarea_y(vw: Int, vh: Int) -> Float = 0.0
-@export(wasm, "textarea_w")
-fn textarea_w(vw: Int, vh: Int) -> Float = 0.0
+@export(wasm, "hit_test")
+fn do_hit_test(x: Float, y: Float) -> Int = sc.full_hit_test(x, y)

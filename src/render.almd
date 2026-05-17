@@ -18,13 +18,25 @@ type RenderItem = {
   selectable: Int,
   content: String,
   kind: Int,
+  scrollable: Int,
 }
 
 // ── View → layout.Node conversion ──
 
-fn view_to_node(view: v.View) -> lay.Node = {
+fn child_to_node(child: v.View, viewport_h: Float, scroll_y: Float) -> lay.Node =
+  view_to_node(child, viewport_h, scroll_y)
+
+fn children_to_nodes(children: List[v.View], viewport_h: Float, scroll_y: Float) -> List[lay.Node] = {
+  var nodes: List[lay.Node] = []
+  for child in children {
+    nodes = nodes + [child_to_node(child, viewport_h, scroll_y)]
+  }
+  nodes
+}
+
+fn view_to_node(view: v.View, viewport_h: Float, scroll_y: Float) -> lay.Node = {
   let s = view._style
-  // TEXT: estimate size from content + font_size
+
   let base = if view._kind == v.TEXT then {
                let char_w = s.font_size * 0.6
                let text_w = int.to_float(string.len(view._content)) * char_w
@@ -33,37 +45,61 @@ fn view_to_node(view: v.View) -> lay.Node = {
                let h = if s.height > 0.0 then s.height else text_h
                lay.leaf(w, h)
              }
-             else if view._kind == v.ROW then lay.row(view._children |> list.map(view_to_node))
-             else if view._kind == v.COL then lay.col(view._children |> list.map(view_to_node))
-             else if view._kind == v.BOX then lay.col(view._children |> list.map(view_to_node))
+             else if view._kind == v.ROW then lay.row(children_to_nodes(view._children, viewport_h, scroll_y))
+             else if view._kind == v.COL then lay.col(children_to_nodes(view._children, viewport_h, scroll_y))
+             else if view._kind == v.BOX then lay.col(children_to_nodes(view._children, viewport_h, scroll_y))
+             else if view._kind == v.LIST then {
+               // Virtual list: leaf node — takes grow space, positions items internally
+               lay.leaf(0.0, 0.0)
+             }
              else lay.leaf(s.width, s.height)
 
-  // Apply style properties to layout node
-  let with_padding = if s.pt > 0.0 or s.pr > 0.0 or s.pb > 0.0 or s.pl > 0.0 then
-    lay.with_padding(base, { top: s.pt, right: s.pr, bottom: s.pb, left: s.pl })
-  else base
-
-  let with_margin = if s.mt > 0.0 or s.mr > 0.0 or s.mb > 0.0 or s.ml > 0.0 then
-    lay.with_margin(with_padding, { top: s.mt, right: s.mr, bottom: s.mb, left: s.ml })
-  else with_padding
-
-  let with_grow = if s.grow > 0.0 then lay.with_grow(with_margin, s.grow)
-                  else with_margin
-
-  let with_gap = if s.gap > 0.0 then lay.with_gap(with_grow, s.gap)
-                 else with_grow
-
-  with_gap
+  // Apply all style properties via direct spread (avoids sf/rebuild parameter bug in WASM)
+  let result = { ...base,
+    width: if s.width > 0.0 then s.width else base.width,
+    height: if s.height > 0.0 then s.height else base.height,
+    padding: if s.pt > 0.0 or s.pr > 0.0 or s.pb > 0.0 or s.pl > 0.0 then
+      { top: s.pt, right: s.pr, bottom: s.pb, left: s.pl }
+    else base.padding,
+    margin: if s.mt > 0.0 or s.mr > 0.0 or s.mb > 0.0 or s.ml > 0.0 then
+      { top: s.mt, right: s.mr, bottom: s.mb, left: s.ml }
+    else base.margin,
+    grow: if s.grow > 0.0 then s.grow else base.grow,
+    gap_main: if s.gap > 0.0 then s.gap else base.gap_main,
+    justify: if s.justify != 0 then s.justify else base.justify,
+    align_items: if s.align != 0 then s.align else base.align_items,
+    position: if s.position == 1 then lay.POSITION_ABSOLUTE else base.position,
+    pos_top: if s.position == 1 then s.pos_top else base.pos_top,
+    pos_right: if s.position == 1 then s.pos_right else base.pos_right,
+    pos_bottom: if s.position == 1 then s.pos_bottom else base.pos_bottom,
+    pos_left: if s.position == 1 then s.pos_left else base.pos_left,
+    width_pct: if s.width_pct >= 0.0 then s.width_pct else base.width_pct,
+    height_pct: if s.height_pct >= 0.0 then s.height_pct else base.height_pct,
+  }
+  result
 }
 
 // ── Layout + zip ──
 
-fn render(view: v.View, viewport_w: Float, viewport_h: Float) -> List[RenderItem] = {
+fn render(view: v.View, viewport_w: Float, viewport_h: Float) -> List[RenderItem] =
+  render_at(view, viewport_w, viewport_h, 0.0)
+
+// Shared scroll state for LIST zip coordination
+var _render_scroll_y = 0.0
+var _render_viewport_h = 0.0
+// After render: the list frame height (for scroll region viewport)
+var list_frame_height = 0.0
+var list_frame_y = 0.0
+
+// render with scroll: LIST widget uses scroll_y to determine visible items
+fn render_at(view: v.View, viewport_w: Float, viewport_h: Float, scroll_y: Float) -> List[RenderItem] = {
+  _render_scroll_y = scroll_y
+  _render_viewport_h = viewport_h
   // Root View gets viewport dimensions for stretch layout
   let sized_view = { ...view, _style: { ...view._style, width: viewport_w, height: viewport_h } }
-  let root_node = view_to_node(sized_view)
+  let root_node = view_to_node(sized_view, viewport_h, scroll_y)
   let rects = lay.layout(root_node, viewport_w, viewport_h)
-  zip_view_rects(view, rects, 0).items
+  zip_view_rects(sized_view, rects, 0).items
 }
 
 // Recursive zip: walk View tree and LayoutRect[] in pre-order
@@ -80,15 +116,68 @@ fn zip_view_rects(view: v.View, rects: List[lay.LayoutRect], idx: Int) -> ZipRes
       fg_r: s.fg.r, fg_g: s.fg.g, fg_b: s.fg.b, fg_a: s.fg.a,
       rounded: s.rounded, opacity: s.opacity, font_size: s.font_size,
       selectable: s.selectable,
-      content: view._content, kind: view._kind,
+      content: view._content, kind: view._kind, scrollable: 0,
     }
     var items = [item]
     var next_idx = idx + 1
-    for child in view._children {
-      let child_result = zip_view_rects(child, rects, next_idx)
-      items = items + child_result.items
-      next_idx = child_result.index
+
+    if view._kind == v.LIST then {
+      // LIST: fixed-height items — direct RenderItem creation (no per-child layout)
+      let list_x = r.x
+      let list_y = r.y
+      let list_h = r.h
+      let list_w = r.w
+      list_frame_height = list_h
+      list_frame_y = list_y
+      let ih = view._item_height
+      let total = list.len(view._children)
+      let pad = 8.0
+      for i in 0..total {
+        let child = view._children[i]
+        let cs = child._style
+        let iy = list_y + int.to_float(i) * ih
+        // Background rect
+        items = items + [{
+          x: list_x, y: iy, w: list_w, h: ih,
+          bg_r: cs.bg.r, bg_g: cs.bg.g, bg_b: cs.bg.b, bg_a: cs.bg.a,
+          fg_r: cs.fg.r, fg_g: cs.fg.g, fg_b: cs.fg.b, fg_a: cs.fg.a,
+          rounded: cs.rounded, opacity: cs.opacity, font_size: cs.font_size,
+          selectable: cs.selectable, content: "", kind: v.ROW, scrollable: 1,
+        }]
+        // Text label (first child)
+        if list.len(child._children) > 0 then {
+          let tc = child._children[0]
+          let ts = tc._style
+          items = items + [{
+            x: list_x + pad, y: iy, w: list_w - pad * 2.0, h: ih,
+            bg_r: 0.0, bg_g: 0.0, bg_b: 0.0, bg_a: 0.0,
+            fg_r: ts.fg.r, fg_g: ts.fg.g, fg_b: ts.fg.b, fg_a: ts.fg.a,
+            rounded: 0.0, opacity: 1.0, font_size: ts.font_size,
+            selectable: ts.selectable, content: tc._content, kind: v.TEXT, scrollable: 1,
+          }]
+        } else ()
+      }
+    } else {
+      for child in view._children {
+        let child_result = zip_view_rects(child, rects, next_idx)
+        items = items + child_result.items
+        next_idx = child_result.index
+      }
     }
     { items: items, index: next_idx }
+  }
+}
+
+// Get total content height from a LIST widget in the view tree
+fn list_content_height(view: v.View) -> Float = {
+  if view._kind == v.LIST then {
+    int.to_float(list.len(view._children)) * view._item_height
+  } else {
+    var found = 0.0
+    for child in view._children {
+      let ch = list_content_height(child)
+      if ch > found then { found = ch } else ()
+    }
+    found
   }
 }

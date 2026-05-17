@@ -91,6 +91,16 @@ fn set_bounds(id: Int, x: Float, y: Float, w: Float, h: Float) -> Unit = {
   rgn_bounds_h[id] = h
 }
 
+fn set_content_height(id: Int, h: Float) -> Unit = {
+  rgn_content_h[id] = h
+  ax_min[ax(id, AXIS_Y)] = 0.0 - float.max(0.0, h - rgn_bounds_h[id])
+}
+
+fn set_viewport_height(id: Int, h: Float) -> Unit = {
+  rgn_bounds_h[id] = h
+  ax_min[ax(id, AXIS_Y)] = 0.0 - float.max(0.0, rgn_content_h[id] - h)
+}
+
 fn reset_all() -> Unit = {
   region_count = 0
   for i in 0..MAX_REGIONS {
@@ -155,6 +165,8 @@ fn tick_axis(i: Int, dt: Float) -> Unit = {
     let decay = powf(1.0 - FRICTION, dt * 60.0)
     ax_vel[i] = ax_vel[i] * decay
     ax_pos[i] = ax_pos[i] + ax_vel[i] * dt
+    // Clamp position to valid scroll range
+    ax_pos[i] = float.max(ax_min[i], float.min(0.0, ax_pos[i]))
     if is_over(i) then {
       ax_state[i] = BOUNCING
       ax_vel[i] = ax_vel[i] * BOUNCE_VEL_RETAIN
