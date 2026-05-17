@@ -41,8 +41,29 @@ fn rebuild_and_upload() -> Unit = {
   let view = td.app()
   let items = render.render_at(view, viewport_w, viewport_h, 0.0)
   cached_items = items
-  let count = list.len(items)
+  upload_visible()
+
+  // Update scroll bounds
+  let content_h = render.list_content_height(view)
+  if render.list_frame_height > 0.0 then {
+    sc.set_viewport_height(root_region, render.list_frame_height)
+    if content_h > 0.0 then {
+      sc.set_content_height(root_region, content_h)
+    } else ()
+    let s = dpr()
+    let clip_top = render.list_frame_y * s
+    let clip_bottom = (render.list_frame_y + render.list_frame_height) * s
+    gpu.write_f32_at(cached_scene.device, cached_scene.params_buf, 20, clip_top)
+    gpu.write_f32_at(cached_scene.device, cached_scene.params_buf, 24, clip_bottom)
+  } else ()
+}
+
+// Upload only on-screen items to GPU (fast enough to call every scroll frame)
+fn upload_visible() -> Unit = {
   let s = dpr()
+  let ry = sc.ax(root_region, sc.AXIS_Y)
+  let scroll_px = sc.ax_pos[ry] * s
+  let screen_h = viewport_h * s
   var xs: List[Float] = []
   var ys: List[Float] = []
   var ws: List[Float] = []
@@ -54,34 +75,25 @@ fn rebuild_and_upload() -> Unit = {
   var roundeds: List[Float] = []
   var opacities: List[Float] = []
   var scrollables: List[Float] = []
-  for item in items {
-    xs = xs + [item.x * s]
-    ys = ys + [item.y * s]
-    ws = ws + [item.w * s]
-    hs = hs + [item.h * s]
-    bg_rs = bg_rs + [item.bg_r]
-    bg_gs = bg_gs + [item.bg_g]
-    bg_bs = bg_bs + [item.bg_b]
-    bg_as = bg_as + [item.bg_a]
-    roundeds = roundeds + [item.rounded * s]
-    opacities = opacities + [item.opacity]
-    scrollables = scrollables + [int.to_float(item.scrollable)]
-  }
-  snaidhm.upload_items(cached_scene, count, xs, ys, ws, hs, bg_rs, bg_gs, bg_bs, bg_as, roundeds, opacities, scrollables)
-
-  // Update scroll bounds
-  let content_h = render.list_content_height(view)
-  if render.list_frame_height > 0.0 then {
-    sc.set_viewport_height(root_region, render.list_frame_height)
-    if content_h > 0.0 then {
-      sc.set_content_height(root_region, content_h)
+  for item in cached_items {
+    let iy = item.y * s + (if item.scrollable == 1 then scroll_px else 0.0)
+    let visible = item.scrollable == 0 or (iy + item.h * s > 0.0 and iy < screen_h)
+    if visible then {
+      list.push(xs, item.x * s)
+      list.push(ys, item.y * s)
+      list.push(ws, item.w * s)
+      list.push(hs, item.h * s)
+      list.push(bg_rs, item.bg_r)
+      list.push(bg_gs, item.bg_g)
+      list.push(bg_bs, item.bg_b)
+      list.push(bg_as, item.bg_a)
+      list.push(roundeds, item.rounded * s)
+      list.push(opacities, item.opacity)
+      list.push(scrollables, int.to_float(item.scrollable))
     } else ()
-    // Write clip bounds to GPU
-    let clip_top = render.list_frame_y * s
-    let clip_bottom = (render.list_frame_y + render.list_frame_height) * s
-    gpu.write_f32_at(cached_scene.device, cached_scene.params_buf, 20, clip_top)
-    gpu.write_f32_at(cached_scene.device, cached_scene.params_buf, 24, clip_bottom)
-  } else ()
+  }
+  let gpu_count = list.len(xs)
+  snaidhm.upload_items(cached_scene, gpu_count, xs, ys, ws, hs, bg_rs, bg_gs, bg_bs, bg_as, roundeds, opacities, scrollables)
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -142,6 +154,7 @@ fn do_prepare(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int,
 @export(wasm, "scroll_tick")
 fn scroll_tick(dt: Float) -> Int = {
   let running = sc.tick_all(dt)
+  upload_visible()
   draw()
   running
 }
@@ -164,14 +177,16 @@ fn set_viewport(w: Float, h: Float) -> Unit = {
 }
 
 
+
 // ══════════════════════════════════════════════════════════════
 // Exports: State change (triggers rebuild)
 // ══════════════════════════════════════════════════════════════
 
 @export(wasm, "todo_init_data")
 fn todo_init_data() -> Unit = {
-  td.add_todo("Buy milk")
-  td.add_todo("Write docs")
+  for i in 0..20 {
+    td.add_todo("Item " + int.to_string(i))
+  }
   rebuild_and_upload()
   draw()
 }

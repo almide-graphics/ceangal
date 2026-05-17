@@ -180,7 +180,7 @@ class ScrollAnimator {
     if (this._raf !== null) return;
     this._lastTime = performance.now();
     const loop = (now) => {
-      const dt = (now - this._lastTime) / 1000;
+        const dt = Math.max(0, (now - this._lastTime) / 1000);
       this._lastTime = now;
       if (this._tickFn?.(dt)) {
         this._raf = requestAnimationFrame(loop);
@@ -281,6 +281,7 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   // ══════════════════════════════════════════════════════════
 
   const animator = new ScrollAnimator();
+  let _tickCount = 0;
   animator._tickFn = (dt) => {
     const running = ex.scroll_tick ? N(ex.scroll_tick(dt)) === 1 : false;
     updateScrollTransform();
@@ -345,7 +346,10 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
       const fontSize = ex.get_item_font_size ? Number(ex.get_item_font_size(B(i))) : 14;
       const span = document.createElement("span");
       span.textContent = text;
-      span.style.cssText = `position:absolute;left:${x}px;top:${scrollable ? y - listTop : y}px;width:${w}px;height:${itemH}px;display:flex;align-items:center;font:${fontSize}px sans-serif;color:white;overflow:hidden;pointer-events:none;user-select:none;`;
+      const selectable = ex.get_item_selectable ? N(ex.get_item_selectable(B(i))) : 0;
+      const pe = selectable ? "auto" : "none";
+      const us = selectable ? "text" : "none";
+      span.style.cssText = `position:absolute;left:${x}px;top:${scrollable ? y - listTop : y}px;width:${w}px;height:${itemH}px;display:flex;align-items:center;font:${fontSize}px sans-serif;color:white;overflow:hidden;pointer-events:${pe};user-select:${us};`;
 
       if (scrollable) {
         inner.appendChild(span);
@@ -387,18 +391,31 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
     const result = N(ex.handle_click(e.clientX - rect.left, e.clientY - rect.top));
     if (result >= 0) {
       ex.todo_toggle(B(result));
-      buildOverlay();
+      scheduleFlush();
     } else if (result === -2) {
       ex.todo_add();
-      buildOverlay();
+      scheduleFlush();
     }
   }
   canvas.addEventListener("click", handleClick);
 
+  let _flushTimer = 0;
+  function scheduleFlush() {
+    clearTimeout(_flushTimer);
+    _flushTimer = setTimeout(() => {
+      const t0 = performance.now();
+      ex.flush?.();
+      const t1 = performance.now();
+      buildOverlay();
+      const t2 = performance.now();
+      console.log(`[perf] flush=${(t1-t0).toFixed(1)}ms overlay=${(t2-t1).toFixed(1)}ms items=${ex.get_item_count ? N(ex.get_item_count()) : "?"}`);
+    }, 16);
+  }
+
   window.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && ex.todo_add) {
       ex.todo_add();
-      buildOverlay();
+      scheduleFlush();
     }
   });
 

@@ -49,30 +49,27 @@ fn todo_item(item: Todo) -> v.View =
   ])
   |> todo_card
 
+fn make_items() -> List[v.View] = {
+  var items: List[v.View] = []
+  for t in todos.get() {
+    list.push(items, todo_item(t))
+  }
+  items
+}
+
 fn app() -> v.View =
-  // Yoga layout test — matches Yoga Playground reference
   v.col([
-    v.col([
-      // Header (height: 60)
-      v.col([]) |> v.h(60.0) |> v.bg(v.rgba(0.3, 0.5, 0.8, 1.0)),
-      // Area 1 (flex: 1, marginInline: 10)
-      v.col([]) |> v.grow(1.0) |> v.mx(10.0) |> v.bg(v.rgba(0.2, 0.7, 0.4, 1.0)),
-      // Area 2 (flex: 2, marginInline: 10)
-      v.col([]) |> v.grow(2.0) |> v.mx(10.0) |> v.bg(v.rgba(0.8, 0.4, 0.2, 1.0)),
-      // Bottom bar (absolute, width: 100%, bottom: 0, height: 64, row, center, space-around)
-      v.row([
-        v.col([]) |> v.w(40.0) |> v.h(40.0) |> v.bg(v.rgba(0.9, 0.9, 0.2, 1.0)),
-        v.col([]) |> v.w(40.0) |> v.h(40.0) |> v.bg(v.rgba(0.9, 0.9, 0.2, 1.0)),
-        v.col([]) |> v.w(40.0) |> v.h(40.0) |> v.bg(v.rgba(0.9, 0.9, 0.2, 1.0)),
-        v.col([]) |> v.w(40.0) |> v.h(40.0) |> v.bg(v.rgba(0.9, 0.9, 0.2, 1.0)),
-      ])
-      |> v.absolute |> v.w_pct(100.0) |> v.pos_bottom(0.0) |> v.h(64.0)
-      |> v.justify(v.JUSTIFY_AROUND) |> v.align(v.ALIGN_CENTER)
-      |> v.bg(v.rgba(0.15, 0.15, 0.2, 1.0)),
-    ])
-    |> v.grow(1.0) |> v.gap(10.0)
+    // Header
+    v.col([v.text("Todos (" + int.to_string(active_count()) + ")") |> v.font(20.0) |> v.bold])
+      |> v.h(56.0) |> v.bg(v.rgba(0.15, 0.18, 0.25, 0.9)) |> v.padding(12.0),
+    // List (grow=1, scrollable)
+    v.list(make_items(), 56.0) |> v.grow(1.0),
+    // Add button
+    v.col([v.text("+ Add (Enter)") |> v.font(14.0)])
+      |> v.h(48.0) |> v.bg(v.rgba(0.25, 0.5, 0.9, 1.0)) |> v.padding(12.0)
+      |> v.rounded(8.0),
   ])
-  |> v.padding(10.0)
+  |> v.gap(8.0) |> v.padding(12.0)
 
 // ── Framework ──
 

@@ -148,6 +148,10 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
 
       if iw < 1.0 || ih < 1.0 || col.w < 0.01 { continue; }
 
+      // Item-level viewport cull (skip entire item if off-screen)
+      if iy + ih < 0.0 || iy > f32(params.height) { continue; }
+      if ix + iw < 0.0 || ix > f32(params.width) { continue; }
+
       // Clip scrollable items to list frame
       if scrollable > 0.5 {
         if f32(py) < params.list_clip_top || f32(py) >= params.list_clip_bottom { continue; }
