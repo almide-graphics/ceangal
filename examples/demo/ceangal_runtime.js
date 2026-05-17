@@ -444,7 +444,7 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
     _resizeTimer = setTimeout(() => {
       animator.stop();
       prepare();
-      ex.todo_init_data?.(); // re-init after resize
+      ex.flush?.();
       buildOverlay();
     }, 150);
   });

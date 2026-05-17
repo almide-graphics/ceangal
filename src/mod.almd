@@ -195,6 +195,12 @@ fn scroll_wheel(region: Int, dx: Float, dy: Float) -> Unit =
 @export(wasm, "get_scroll_pos")
 fn get_scroll_pos(region: Int, axis: Int) -> Float = sc.get_pos(region, axis)
 
+@export(wasm, "flush")
+fn flush() -> Unit = {
+  rebuild_and_upload()
+  draw()
+}
+
 @export(wasm, "set_scroll_frac")
 fn set_scroll_frac(frac: Float) -> Unit = {
   let ry = sc.ax(root_region, sc.AXIS_Y)
