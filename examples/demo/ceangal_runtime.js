@@ -373,6 +373,15 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   // Events: wheel → physics only, animator handles rendering
   // ══════════════════════════════════════════════════════════
 
+  // Mouse light effect (fragment-only re-render, no compute)
+  canvas.addEventListener("mousemove", (e) => {
+    const rect = canvas.getBoundingClientRect();
+    ex.set_mouse?.(e.clientX - rect.left, e.clientY - rect.top);
+  });
+  canvas.addEventListener("mouseleave", () => {
+    ex.set_mouse?.(0, 0);
+  });
+
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
     const scale = e.deltaMode === 1 ? 20 : 1;

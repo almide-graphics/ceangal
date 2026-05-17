@@ -1,0 +1,107 @@
+// ceangal virtual_list — windowed list virtualization
+//
+// Fixed-height items, O(1) index lookup, buffer zone with lazy re-prepare.
+// Only items in the visible window + buffer are flattened/tiled.
+// Scroll within buffer = GPU uniform update only (< 2ms).
+// Scroll past buffer boundary = re-prepare (flatten + tile visible items).
+//
+// Design ref: Flutter RenderSliverFixedExtentList
+
+import math
+
+// ── Configuration ──
+
+let BUFFER_SCREENS = 4  // buffer zone: viewport × N on each side
+
+// ── State ──
+
+var item_count = 0
+var item_height = 0.0   // fixed height per item (CSS px)
+var viewport_h = 0.0
+var viewport_w = 0.0
+
+// Current prepared window (item indices)
+var window_start = 0
+var window_end = 0
+
+// Content offset: where the prepared window starts in content space
+// (items before window_start are virtual — only their height counts)
+var window_offset_y = 0.0
+
+// ── Setup ──
+
+fn init(count: Int, height: Float, vw: Float, vh: Float) -> Unit = {
+  item_count = count
+  item_height = height
+  viewport_w = vw
+  viewport_h = vh
+  window_start = 0
+  window_end = 0
+  window_offset_y = 0.0
+}
+
+// Total content height
+fn content_height() -> Float = int.to_float(item_count) * item_height
+
+// ── Window computation ──
+// Given a scroll position (CSS px, negative = scrolled down),
+// compute which items should be in the prepared window.
+
+fn compute_window(scroll_y: Float) -> { start: Int, end: Int } = {
+  let visible_top = 0.0 - scroll_y  // content px of viewport top
+  let visible_bottom = visible_top + viewport_h
+  let buffer = viewport_h * int.to_float(BUFFER_SCREENS)
+
+  let start_px = float.max(0.0, visible_top - buffer)
+  let end_px = float.min(content_height(), visible_bottom + buffer)
+
+  let start_idx = int.max(0, float.to_int(float.floor(start_px / item_height)))
+  let end_idx = int.min(item_count, float.to_int(float.ceil(end_px / item_height)))
+
+  { start: start_idx, end: end_idx }
+}
+
+// Check if scroll position requires a window shift (re-prepare)
+fn needs_reprepare(scroll_y: Float) -> Bool = {
+  let w = compute_window(scroll_y)
+  w.start != window_start or w.end != window_end
+}
+
+// Apply new window after re-prepare
+fn apply_window(scroll_y: Float) -> Unit = {
+  let w = compute_window(scroll_y)
+  window_start = w.start
+  window_end = w.end
+  window_offset_y = int.to_float(w.start) * item_height
+}
+
+// Number of items in current window
+fn window_size() -> Int = window_end - window_start
+
+// ── NDC positioning ──
+// Convert item index (relative to window) to NDC y position.
+// Items are positioned top-down starting from NDC y = 1.0 (viewport top).
+// Only items in [window_start, window_end) have actual cubics.
+
+// NDC position relative to WINDOW top (not content top)
+fn item_ndc_y(item_idx: Int) -> Float = {
+  let content_y = int.to_float(item_idx) * item_height
+  let window_y = content_y - window_offset_y
+  1.0 - (window_y / viewport_h) * 2.0
+}
+
+// Window height in CSS px (what GPU actually sees)
+fn window_height() -> Float = int.to_float(window_end - window_start) * item_height
+
+fn item_ndc_height() -> Float = (item_height / viewport_h) * 2.0
+
+fn item_ndc_x() -> Float = 0.0 - 1.0
+fn item_ndc_width() -> Float = 2.0
+
+// ── Accessors ──
+
+fn get_window_start() -> Int = window_start
+fn get_window_end() -> Int = window_end
+fn get_window_offset() -> Float = window_offset_y
+fn get_item_count() -> Int = item_count
+fn get_item_height() -> Float = item_height

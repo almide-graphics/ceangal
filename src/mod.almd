@@ -111,6 +111,28 @@ fn draw() -> Unit = {
 }
 
 // ══════════════════════════════════════════════════════════════
+// Exports: Mouse effects (fragment-only, no compute re-run)
+// ══════════════════════════════════════════════════════════════
+
+@export(wasm, "set_mouse")
+fn set_mouse(css_x: Float, css_y: Float) -> Unit = {
+  if scene_ready then {
+    let s = dpr()
+    gpu.write_f32_at(cached_scene.device, cached_scene.params_buf, 56, css_x * s)
+    gpu.write_f32_at(cached_scene.device, cached_scene.params_buf, 60, css_y * s)
+    snaidhm.draw_render_only(cached_scene)
+  } else ()
+}
+
+@export(wasm, "set_hover")
+fn set_hover(item_idx: Float) -> Unit = {
+  if scene_ready then {
+    gpu.write_f32_at(cached_scene.device, cached_scene.params_buf, 44, item_idx)
+    snaidhm.draw_render_only(cached_scene)
+  } else ()
+}
+
+// ══════════════════════════════════════════════════════════════
 // Exports: Scene lifecycle
 // ══════════════════════════════════════════════════════════════
 
