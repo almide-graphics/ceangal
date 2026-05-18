@@ -384,7 +384,7 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   positionTextFields();
 
   textareaEl.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       const text = textareaEl.value.trim();
       if (text && ex.input_clear) {
