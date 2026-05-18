@@ -19,11 +19,10 @@
 ## Stack
 
 ```
-Apps (nendo, ...)
-  └─ ceangal  ← layout, widget, interaction
-       └─ snaidhm  ← GPU path renderer, SDF text, images
-            └─ lumen  ← vec, mat, color, quat
-                 └─ almide  ← language, WASM/WGSL codegen
+ceangal  ← layout, widget, interaction
+  └─ snaidhm  ← GPU path renderer, SDF text, images
+       └─ lumen  ← vec, mat, color, quat
+            └─ almide  ← language, WASM/WGSL codegen
 ```
 
 ## Features
