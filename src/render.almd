@@ -52,6 +52,11 @@ fn view_to_node(view: v.View, viewport_h: Float, scroll_y: Float) -> lay.Node = 
                // Virtual list: leaf node — takes grow space, positions items internally
                lay.leaf(0.0, 0.0)
              }
+             else if view._kind == v.TEXT_FIELD then {
+               // Text field: leaf with text height
+               let h = if s.height > 0.0 then s.height else s.font_size * 1.4 + 24.0
+               lay.leaf(0.0 - 1.0, h)
+             }
              else lay.leaf(s.width, s.height)
 
   // Apply all style properties via direct spread (avoids sf/rebuild parameter bug in WASM)

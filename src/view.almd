@@ -29,6 +29,7 @@ let BOX = 1
 let ROW = 2
 let COL = 3
 let LIST = 4
+let TEXT_FIELD = 5
 
 let _transparent = { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }
 let _white = { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }
@@ -79,6 +80,10 @@ fn row(children: List[View]) -> View =
 // Virtual list: only renders visible items. Fixed item height for O(1) scroll.
 fn list(children: List[View], item_height: Float) -> View =
   { _kind: LIST, _children: children, _content: "", _style: _default, _on_click: 0, _key: 0, _item_height: item_height }
+
+// Text field: editable text input. content = placeholder text.
+fn text_field(placeholder: String) -> View =
+  { _kind: TEXT_FIELD, _children: [], _content: placeholder, _style: _default, _on_click: 0, _key: 0, _item_height: 0.0 }
 
 // ── Layout modifiers ──
 

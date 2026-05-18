@@ -226,6 +226,30 @@ fn set_viewport(w: Float, h: Float) -> Unit = {
 
 
 // ══════════════════════════════════════════════════════════════
+// Exports: Text field input
+// ══════════════════════════════════════════════════════════════
+
+// Input: JS writes UTF-8 to a buffer, WASM reads it
+var input_buf: List[Int] = []
+
+@export(wasm, "input_clear")
+fn input_clear() -> Unit = { input_buf = [] }
+
+@export(wasm, "input_push")
+fn input_push(byte: Int) -> Unit = { input_buf = input_buf + [byte] }
+
+@export(wasm, "input_submit")
+fn input_submit() -> Unit = {
+  let text = string.from_bytes(input_buf)
+  input_buf = []
+  if string.len(text) > 0 then {
+    td.add_todo(text)
+    rebuild_and_upload()
+    draw()
+  } else ()
+}
+
+// ══════════════════════════════════════════════════════════════
 // Exports: State change (triggers rebuild)
 // ══════════════════════════════════════════════════════════════
 

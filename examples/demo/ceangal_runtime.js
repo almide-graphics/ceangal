@@ -362,6 +362,44 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   buildOverlay();
 
   // ══════════════════════════════════════════════════════════
+  // TextField: position textarea over TEXT_FIELD items
+  // ══════════════════════════════════════════════════════════
+
+  function positionTextFields() {
+    const count = ex.get_item_count ? N(ex.get_item_count()) : 0;
+    for (let i = 0; i < count; i++) {
+      if (N(ex.get_item_kind(B(i))) !== 5) continue; // TEXT_FIELD = 5
+      const x = Number(ex.get_item_x(B(i)));
+      const y = Number(ex.get_item_y(B(i)));
+      const w = Number(ex.get_item_w(B(i)));
+      const h = Number(ex.get_item_h(B(i)));
+      const fontSize = Number(ex.get_item_font_size(B(i)));
+      const textId = N(ex.get_item_text(B(i)));
+      const placeholder = strings[textId] || "";
+      textareaEl.style.cssText = `position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;font:${fontSize}px sans-serif;color:white;background:transparent;border:none;outline:none;padding:12px;caret-color:white;z-index:2;pointer-events:auto;resize:none;`;
+      textareaEl.placeholder = placeholder;
+      break; // only first field
+    }
+  }
+  positionTextFields();
+
+  textareaEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      const text = textareaEl.value.trim();
+      if (text && ex.input_clear) {
+        ex.input_clear();
+        const bytes = new TextEncoder().encode(text);
+        for (let b of bytes) ex.input_push(B(b));
+        ex.input_submit();
+        textareaEl.value = "";
+        buildOverlay();
+        positionTextFields();
+      }
+    }
+  });
+
+  // ══════════════════════════════════════════════════════════
   // Events: wheel → physics only, animator handles rendering
   // ══════════════════════════════════════════════════════════
 
@@ -427,12 +465,6 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
     _overlayTimer = setTimeout(() => buildOverlay(), 16);
   }
 
-  window.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && ex.todo_add) {
-      ex.todo_add();
-      scheduleOverlay();
-    }
-  });
 
   // ══════════════════════════════════════════════════════════
   // Resize
