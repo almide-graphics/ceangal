@@ -27,6 +27,16 @@ let _dataIsF32 = [];
 let _bindingEntries = [];
 let SHADERS = [];
 
+// ── Tile-based item dispatch (computed in JS, injected into compute pass) ──
+// Ref: https://www.w3.org/TR/webgpu/#dom-gpucomputepassencoder-setbindgroup
+const DISPATCH_TILE = 64;
+const MAX_ITEMS_PER_TILE = 32;
+let _tileCountsBuf = null, _tileIdsBuf = null, _tileBindGroup = null;
+let _computePipelineObj = null;
+let _scrollY = 0, _vpWidth = 0, _vpHeight = 0;
+let _lastItemsF32 = null, _lastItemCount = 0;
+let _lastTilePipeline = null;
+
 // ── WASM import namespaces ──
 
 function createDomImports() {
@@ -67,12 +77,15 @@ function createGpuImports(canvas) {
     },
     write_f32_at(deviceId, bufferId, byteOffset, value) {
       g(deviceId).queue.writeBuffer(g(bufferId), N(byteOffset), new Float32Array([value]));
+      if (N(byteOffset) === 28) _scrollY = value; // track scroll_y for tile assignment
     },
     write_u32_at(deviceId, bufferId, byteOffset, value) {
       g(deviceId).queue.writeBuffer(g(bufferId), N(byteOffset), new Uint32Array([N(value)]));
     },
     create_compute_pipeline(deviceId, shaderId, _) {
-      return B(h(g(deviceId).createComputePipeline({ layout: "auto", compute: { module: g(shaderId), entryPoint: "fine" } })));
+      const p = g(deviceId).createComputePipeline({ layout: "auto", compute: { module: g(shaderId), entryPoint: "fine" } });
+      _computePipelineObj = p;
+      return B(h(p));
     },
     create_render_pipeline(deviceId, shaderId, _vp, _vl, _fp, _fl, _fmt) {
       return B(h(g(deviceId).createRenderPipeline({
@@ -128,7 +141,15 @@ function createGpuImports(canvas) {
     set_bind_group(passId, index, bgId) { g(passId).setBindGroup(N(index), g(bgId)); },
     begin_encoder: (deviceId) => B(h(g(deviceId).createCommandEncoder())),
     begin_compute_pass: (encoderId) => B(h(g(encoderId).beginComputePass())),
-    dispatch_workgroups(passId, x, y, z) { g(passId).dispatchWorkgroups(N(x), N(y), N(z)); },
+    dispatch_workgroups(passId, x, y, z) {
+      // Lazy init tile dispatch (handles first frame + resize)
+      if (_computePipelineObj && _computePipelineObj !== _lastTilePipeline) {
+        _setupTileDispatch(_device, canvas.width, canvas.height);
+        _lastTilePipeline = _computePipelineObj;
+      }
+      if (_tileBindGroup) g(passId).setBindGroup(3, _tileBindGroup);
+      g(passId).dispatchWorkgroups(N(x), N(y), N(z));
+    },
     begin_render_pass(encoderId, r, g_, b, a) {
       return B(h(g(encoderId).beginRenderPass({
         colorAttachments: [{ view: _context.getCurrentTexture().createView(),
@@ -153,11 +174,86 @@ function createGpuImports(canvas) {
         if (_dataIsF32[i]) f32[i] = _dataChunks[i]; else u32[i] = _dataChunks[i];
       }
       g(deviceId).queue.writeBuffer(g(bufferId), 0, new Uint8Array(buf));
+      // Capture items data for tile assignment (256 items × 12 floats = 3072)
+      if (_dataChunks.length === 3072 && _tileCountsBuf) {
+        _lastItemsF32 = new Float32Array(f32);
+        _lastItemCount = f32[11]; // items[0].meta.w = item count (stored as float)
+        _updateTileAssignment(g(deviceId));
+      }
       _dataChunks = []; _dataIsF32 = [];
     },
     log_int(v) { console.log("[gpu]", N(v)); },
     log_str(ptr, len) { console.log("[gpu]", new TextDecoder().decode(new Uint8Array(_wasmMemory.buffer, N(ptr), N(len)))); },
   };
+}
+
+// ── Tile dispatch: setup + per-frame assignment ──
+
+function _setupTileDispatch(device, width, height) {
+  _vpWidth = width; _vpHeight = height;
+  const dtx = Math.ceil(width / DISPATCH_TILE);
+  const dty = Math.ceil(height / DISPATCH_TILE);
+  const tileCount = dtx * dty;
+
+  _tileCountsBuf = device.createBuffer({
+    size: Math.max(4, tileCount * 4),
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  });
+  _tileIdsBuf = device.createBuffer({
+    size: Math.max(4, tileCount * MAX_ITEMS_PER_TILE * 4),
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  });
+
+  // Create bind group for compute group 3 (auto-layout from pipeline)
+  const layout = _computePipelineObj.getBindGroupLayout(3);
+  _tileBindGroup = device.createBindGroup({
+    layout,
+    entries: [
+      { binding: 0, resource: { buffer: _tileCountsBuf } },
+      { binding: 1, resource: { buffer: _tileIdsBuf } },
+    ],
+  });
+}
+
+function _updateTileAssignment(device) {
+  if (!_lastItemsF32 || !_tileCountsBuf) return;
+  const w = _vpWidth, h = _vpHeight;
+  const dtx = Math.ceil(w / DISPATCH_TILE);
+  const dty = Math.ceil(h / DISPATCH_TILE);
+  const tileCount = dtx * dty;
+  const itemCount = _lastItemCount;
+
+  const counts = new Uint32Array(tileCount);
+  const ids = new Uint32Array(tileCount * MAX_ITEMS_PER_TILE);
+
+  for (let ri = 0; ri < Math.min(itemCount, 256); ri++) {
+    const base = ri * 12;
+    const ix = _lastItemsF32[base];
+    const iy_base = _lastItemsF32[base + 1];
+    const iw = _lastItemsF32[base + 2];
+    const ih = _lastItemsF32[base + 3];
+    const scrollable = _lastItemsF32[base + 10]; // meta.z = scrollable flag
+    const iy = iy_base + (scrollable > 0.5 ? _scrollY : 0);
+
+    const tx0 = Math.max(0, Math.floor(ix / DISPATCH_TILE));
+    const ty0 = Math.max(0, Math.floor(iy / DISPATCH_TILE));
+    const tx1 = Math.min(dtx - 1, Math.floor((ix + iw) / DISPATCH_TILE));
+    const ty1 = Math.min(dty - 1, Math.floor((iy + ih) / DISPATCH_TILE));
+
+    for (let ty = ty0; ty <= ty1; ty++) {
+      for (let tx = tx0; tx <= tx1; tx++) {
+        const tid = ty * dtx + tx;
+        const c = counts[tid];
+        if (c < MAX_ITEMS_PER_TILE) {
+          ids[tid * MAX_ITEMS_PER_TILE + c] = ri;
+          counts[tid] = c + 1;
+        }
+      }
+    }
+  }
+
+  device.queue.writeBuffer(_tileCountsBuf, 0, counts);
+  device.queue.writeBuffer(_tileIdsBuf, 0, ids);
 }
 
 function createFontImports(fontBuffer) {

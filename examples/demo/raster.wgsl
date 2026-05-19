@@ -78,7 +78,7 @@ fn evaluate_paint(paint: Paint, p: vec2<f32>) -> vec4<f32> {
 // Item layout: 3 vec4s per item (48 bytes)
 //   [i*3+0] = (x, y, w, h) in physical px
 //   [i*3+1] = (bg_r, bg_g, bg_b, bg_a)
-//   [i*3+2] = (rounded, opacity, 0, item_count)
+//   [i*3+2] = (rounded, opacity, scrollable, item_count)
 // Region layout in scroll_regions: 3 vec4s per region (48 bytes)
 //   [i*3+0] = bounds (x, y, w, h) in physical px
 //   [i*3+1] = (scroll_x, scroll_y, content_w, content_h)
@@ -86,6 +86,11 @@ fn evaluate_paint(paint: Paint, p: vec2<f32>) -> vec4<f32> {
 
 const MAX_CMDS_PER_TILE: u32 = 8u;
 const MAX_SCROLL_REGIONS: u32 = 8u;
+// Tile-based item dispatch (group 3 — compute only, avoids group 2 conflict with bg_texture)
+@group(3) @binding(0) var<storage, read>       tile_item_counts: array<u32>;
+@group(3) @binding(1) var<storage, read>       tile_item_ids: array<u32>;
+const DISPATCH_TILE: u32 = 64u;
+const MAX_ITEMS_PER_TILE: u32 = 32u;
 
 fn seg_area(p0: vec2<f32>, p1: vec2<f32>) -> f32 {
   let y = p0.y;
@@ -130,34 +135,36 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
   // Viewport-sized buffer: items positioned at viewport-relative coords
   if (px >= params.width || py >= params.height) { return; }
 
-  // ── Render items: content-space items + scroll_y offset ──
-  let ri_count = u32(render_items[2].w);
+  // ── Tile-based item dispatch (tile buffers in group 0 bindings 8-9) ──
+  let dispatch_tiles_x = (params.width + DISPATCH_TILE - 1u) / DISPATCH_TILE;
+  let dtx = px / DISPATCH_TILE;
+  let dty = py / DISPATCH_TILE;
+  let tile_id = dty * dispatch_tiles_x + dtx;
+  let ri_count = tile_item_counts[tile_id];
+
   if ri_count > 0u {
     var color = vec3<f32>(0.0);
     var alpha = 0.0;
 
-    for (var ri = 0u; ri < min(ri_count, 256u); ri++) {
-      let pos = render_items[ri * 3u];       // x, y, w, h (content-space)
-      let col = render_items[ri * 3u + 1u];  // bg_r, bg_g, bg_b, bg_a
-      let item_meta = render_items[ri * 3u + 2u]; // rounded, opacity, 0, count
+    for (var i = 0u; i < min(ri_count, MAX_ITEMS_PER_TILE); i++) {
+      let ri = tile_item_ids[tile_id * MAX_ITEMS_PER_TILE + i];
+      let pos = render_items[ri * 3u];
+      let col = render_items[ri * 3u + 1u];
+      let item_meta = render_items[ri * 3u + 2u];
 
       let ix = pos.x;
-      let scrollable = item_meta.z;  // 1.0 = list item (scrolls), 0.0 = fixed
+      let scrollable = item_meta.z;
       let iy = pos.y + params.scroll_y * scrollable;
       let iw = pos.z; let ih = pos.w;
 
       if iw < 1.0 || ih < 1.0 || col.w < 0.01 { continue; }
-
-      // Item-level viewport cull (skip entire item if off-screen)
       if iy + ih < 0.0 || iy > f32(params.height) { continue; }
       if ix + iw < 0.0 || ix > f32(params.width) { continue; }
 
-      // Clip scrollable items to list frame
       if scrollable > 0.5 {
         if f32(py) < params.list_clip_top || f32(py) >= params.list_clip_bottom { continue; }
       }
 
-      // Pixel-level AABB reject (cheaper than SDF)
       let fpx = f32(px);
       let fpy = f32(py);
       if fpx < ix || fpx > ix + iw || fpy < iy || fpy > iy + ih { continue; }
@@ -178,6 +185,13 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
     return;
   }
 
+  // Empty tile in items mode: write same as old path background (opaque dark)
+  let global_item_count = u32(render_items[2].w);
+  if global_item_count > 0u {
+    pixels[py * params.width + px] = pack_color(0.0, 0.0, 0.0, 0.0);
+    return;
+  }
+
   // ── Legacy path rendering (segments) ──
   let max_cpx = f32(params.content_tiles_x * TILE_SIZE);
   let max_cpy = f32(params.content_tiles_y * TILE_SIZE);
@@ -191,11 +205,11 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
 
   let content_tile_x = u32(content_px) / TILE_SIZE;
   let content_tile_y = u32(content_py) / TILE_SIZE;
-  let tile_id = content_tile_y * params.content_tiles_x + content_tile_x;
+  let path_tile_id = content_tile_y * params.content_tiles_x + content_tile_x;
 
-  let cmd_count = min(tile_cmd_counts[tile_id], MAX_CMDS_PER_TILE);
-  let tile_base = tile_id * MAX_SEGS_PER_TILE;
-  let cmd_base = tile_id * MAX_CMDS_PER_TILE * 4u;
+  let cmd_count = min(tile_cmd_counts[path_tile_id], MAX_CMDS_PER_TILE);
+  let tile_base = path_tile_id * MAX_SEGS_PER_TILE;
+  let cmd_base = path_tile_id * MAX_CMDS_PER_TILE * 4u;
 
   let p = vec2<f32>(
     content_px / f32(params.width) * 2.0 - 1.0,
