@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>ceangal tile dispatch — stress test</title>
+  <style>
+    * { margin: 0; padding: 0; }
+    body { background: #0a0a0e; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; color: #ccc; font-family: monospace; }
+    canvas { width: 600px; height: 600px; }
+    #hud { margin-top: 8px; font-size: 14px; }
+    #controls { margin-bottom: 8px; }
+    button { background: #222; color: #ccc; border: 1px solid #555; padding: 4px 12px; cursor: pointer; font-family: monospace; }
+    button:hover { background: #333; }
+    button.active { background: #446; border-color: #88a; }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <button data-n="200">200</button>
+    <button data-n="500">500</button>
+    <button data-n="1000" class="active">1000</button>
+    <button data-n="2000">2000</button>
+    <button data-n="5000">5000</button>
+  </div>
+  <canvas id="c" width="1200" height="1200"></canvas>
+  <div id="hud">loading...</div>
+  <script type="module">
+const canvas = document.getElementById("c");
+const hud = document.getElementById("hud");
+const W = canvas.width, H = canvas.height;
+
+const DISPATCH_TILE = 64;
+const MAX_ITEMS_PER_TILE = 32;
+
+const adapter = await navigator.gpu?.requestAdapter();
+if (!adapter) { hud.textContent = "WebGPU not supported"; throw new Error("no gpu"); }
+const device = await adapter.requestDevice();
+const ctx = canvas.getContext("webgpu");
+const format = navigator.gpu.getPreferredCanvasFormat();
+ctx.configure({ device, format, alphaMode: "opaque" });
+
+// Load raster.wgsl and extract only the compute entry point bindings we need
+// We create a minimal shader for the stress test
+const shaderCode = `
+const MAX_PER_TILE: u32 = 32u;
+const DISPATCH_TILE: u32 = 64u;
+
+struct Params {
+  width: u32,
+  height: u32,
+  _pad0: u32,
+  _pad1: u32,
+}
+
+@group(0) @binding(0) var<storage, read_write> pixels: array<u32>;
+@group(0) @binding(1) var<uniform>             params: Params;
+@group(0) @binding(2) var<storage, read>       items: array<vec4<f32>>;
+@group(1) @binding(0) var<storage, read>       tile_item_counts: array<u32>;
+@group(1) @binding(1) var<storage, read>       tile_item_ids: array<u32>;
+
+fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
+  let q = abs(p) - b + vec2<f32>(r, r);
+  return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - r;
+}
+
+fn pack_color(r: f32, g: f32, b: f32, a: f32) -> u32 {
+  let ri = u32(clamp(r * 255.0, 0.0, 255.0));
+  let gi = u32(clamp(g * 255.0, 0.0, 255.0));
+  let bi = u32(clamp(b * 255.0, 0.0, 255.0));
+  let ai = u32(clamp(a * 255.0, 0.0, 255.0));
+  return ri | (gi << 8u) | (bi << 16u) | (ai << 24u);
+}
+
+@compute @workgroup_size(16, 16)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let px = gid.x;
+  let py = gid.y;
+  if (px >= params.width || py >= params.height) { return; }
+
+  let dispatch_tiles_x = (params.width + DISPATCH_TILE - 1u) / DISPATCH_TILE;
+  let dtx = px / DISPATCH_TILE;
+  let dty = py / DISPATCH_TILE;
+  let tile_id = dty * dispatch_tiles_x + dtx;
+  let ri_count = tile_item_counts[tile_id];
+
+  var color = vec3<f32>(0.04, 0.04, 0.07);
+  var alpha = 0.0;
+
+  for (var i = 0u; i < min(ri_count, MAX_PER_TILE); i++) {
+    let ri = tile_item_ids[tile_id * MAX_PER_TILE + i];
+    let pos = items[ri * 3u];
+    let col = items[ri * 3u + 1u];
+    let item_meta = items[ri * 3u + 2u];
+
+    let ix = pos.x; let iy = pos.y;
+    let iw = pos.z; let ih = pos.w;
+    if iw < 1.0 || ih < 1.0 || col.w < 0.01 { continue; }
+
+    let fpx = f32(px); let fpy = f32(py);
+    if fpx < ix || fpx > ix + iw || fpy < iy || fpy > iy + ih { continue; }
+
+    let corner_r = item_meta.x;
+    let local = vec2<f32>(fpx - ix - iw * 0.5, fpy - iy - ih * 0.5);
+    let half = vec2<f32>(iw * 0.5, ih * 0.5);
+    let d = sd_rounded_box(local, half, corner_r);
+
+    if d < 1.0 && col.w > 0.01 {
+      let aa = 1.0 - smoothstep(-1.0, 0.5, d);
+      let a = aa * col.w * item_meta.y;
+      color = mix(color, col.xyz, a);
+      alpha = alpha + a * (1.0 - alpha);
+    }
+  }
+
+  pixels[py * params.width + px] = pack_color(color.x, color.y, color.z, max(alpha, 1.0));
+}
+
+struct VSOut {
+  @builtin(position) pos: vec4<f32>,
+  @location(0) uv: vec2<f32>,
+}
+
+@vertex
+fn vs(@builtin(vertex_index) idx: u32) -> VSOut {
+  var positions = array<vec2<f32>, 6>(
+    vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(-1.0, 1.0),
+    vec2<f32>(-1.0, 1.0),  vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0),
+  );
+  var uvs = array<vec2<f32>, 6>(
+    vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 0.0),
+    vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(1.0, 0.0),
+  );
+  var out: VSOut;
+  out.pos = vec4<f32>(positions[idx], 0.0, 1.0);
+  out.uv = uvs[idx];
+  return out;
+}
+
+@group(0) @binding(0) var<storage, read> render_pixels: array<u32>;
+@group(0) @binding(1) var<uniform>       render_params: Params;
+
+@fragment
+fn fs(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
+  let w = f32(render_params.width);
+  let h = f32(render_params.height);
+  let px_u = u32(uv.x * w);
+  let py_u = u32(uv.y * h);
+  let idx = py_u * render_params.width + px_u;
+  let packed = render_pixels[idx];
+  let r = f32(packed & 0xFFu) / 255.0;
+  let g = f32((packed >> 8u) & 0xFFu) / 255.0;
+  let b = f32((packed >> 16u) & 0xFFu) / 255.0;
+  return vec4<f32>(r, g, b, 1.0);
+}
+`;
+
+const shader = device.createShaderModule({ code: shaderCode });
+
+// Buffers
+const pixelBuf = device.createBuffer({ size: W * H * 4, usage: GPUBufferUsage.STORAGE });
+const paramsBuf = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+device.queue.writeBuffer(paramsBuf, 0, new Uint32Array([W, H, 0, 0]));
+
+const maxItems = 5000;
+const itemsBuf = device.createBuffer({ size: maxItems * 48, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+
+const tilesX = Math.ceil(W / DISPATCH_TILE);
+const tilesY = Math.ceil(H / DISPATCH_TILE);
+const tileCount = tilesX * tilesY;
+const tileCountsBuf = device.createBuffer({ size: tileCount * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+const tileIdsBuf = device.createBuffer({ size: tileCount * MAX_ITEMS_PER_TILE * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+
+// Compute pipeline
+const computePipeline = device.createComputePipeline({ layout: "auto", compute: { module: shader, entryPoint: "main" } });
+const computeBG0 = device.createBindGroup({
+  layout: computePipeline.getBindGroupLayout(0),
+  entries: [
+    { binding: 0, resource: { buffer: pixelBuf } },
+    { binding: 1, resource: { buffer: paramsBuf } },
+    { binding: 2, resource: { buffer: itemsBuf } },
+  ],
+});
+const computeBG1 = device.createBindGroup({
+  layout: computePipeline.getBindGroupLayout(1),
+  entries: [
+    { binding: 0, resource: { buffer: tileCountsBuf } },
+    { binding: 1, resource: { buffer: tileIdsBuf } },
+  ],
+});
+
+// Render pipeline
+const renderPipeline = device.createRenderPipeline({
+  layout: "auto",
+  vertex: { module: shader, entryPoint: "vs" },
+  fragment: { module: shader, entryPoint: "fs", targets: [{ format }] },
+  primitive: { topology: "triangle-list" },
+});
+const renderBG = device.createBindGroup({
+  layout: renderPipeline.getBindGroupLayout(0),
+  entries: [
+    { binding: 0, resource: { buffer: pixelBuf } },
+    { binding: 1, resource: { buffer: paramsBuf } },
+  ],
+});
+
+// Item generation
+function hsl(h, s, l) {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+  const m = l - c / 2;
+  let r, g, b;
+  if (h < 60) { r = c; g = x; b = 0; }
+  else if (h < 120) { r = x; g = c; b = 0; }
+  else if (h < 180) { r = 0; g = c; b = x; }
+  else if (h < 240) { r = 0; g = x; b = c; }
+  else if (h < 300) { r = x; g = 0; b = c; }
+  else { r = c; g = 0; b = x; }
+  return [r + m, g + m, b + m];
+}
+
+let N = 1000;
+let items = null;
+let time = 0;
+
+function generateItems() {
+  const data = new Float32Array(N * 12);
+  for (let i = 0; i < N; i++) {
+    const angle = (i / N) * Math.PI * 2;
+    const r = 200 + Math.sin(i * 0.1) * 150;
+    const w = 20 + Math.random() * 40;
+    const h = 20 + Math.random() * 40;
+    const x = W / 2 + Math.cos(angle) * r - w / 2;
+    const y = H / 2 + Math.sin(angle) * r - h / 2;
+    const [cr, cg, cb] = hsl((i / N) * 360, 0.8, 0.6);
+    const off = i * 12;
+    data[off] = x; data[off + 1] = y; data[off + 2] = w; data[off + 3] = h;
+    data[off + 4] = cr; data[off + 5] = cg; data[off + 6] = cb; data[off + 7] = 0.9;
+    data[off + 8] = Math.min(w, h) * 0.3; // corner radius
+    data[off + 9] = 1.0; // opacity
+    data[off + 10] = 0.0;
+    data[off + 11] = N;
+  }
+  items = data;
+}
+
+function updateItems(t) {
+  for (let i = 0; i < N; i++) {
+    const angle = (i / N) * Math.PI * 2 + t * 0.5;
+    const r = 200 + Math.sin(i * 0.1 + t * 2) * 150;
+    const off = i * 12;
+    const w = items[off + 2];
+    const h = items[off + 3];
+    items[off] = W / 2 + Math.cos(angle) * r - w / 2;
+    items[off + 1] = H / 2 + Math.sin(angle) * r - h / 2;
+  }
+}
+
+function computeTiles() {
+  const counts = new Uint32Array(tileCount);
+  const ids = new Uint32Array(tileCount * MAX_ITEMS_PER_TILE);
+
+  for (let i = 0; i < N; i++) {
+    const off = i * 12;
+    const x0 = items[off], y0 = items[off + 1];
+    const w = items[off + 2], h = items[off + 3];
+    const tx0 = Math.max(0, Math.floor(x0 / DISPATCH_TILE));
+    const ty0 = Math.max(0, Math.floor(y0 / DISPATCH_TILE));
+    const tx1 = Math.min(tilesX - 1, Math.floor((x0 + w) / DISPATCH_TILE));
+    const ty1 = Math.min(tilesY - 1, Math.floor((y0 + h) / DISPATCH_TILE));
+
+    for (let ty = ty0; ty <= ty1; ty++) {
+      for (let tx = tx0; tx <= tx1; tx++) {
+        const tid = ty * tilesX + tx;
+        const c = counts[tid];
+        if (c < MAX_ITEMS_PER_TILE) {
+          ids[tid * MAX_ITEMS_PER_TILE + c] = i;
+          counts[tid]++;
+        }
+      }
+    }
+  }
+  return { counts, ids };
+}
+
+generateItems();
+
+// FPS tracking
+let frameCount = 0, lastFpsTime = performance.now();
+let fps = 0;
+
+function frame() {
+  time += 0.016;
+  updateItems(time);
+
+  device.queue.writeBuffer(itemsBuf, 0, items.buffer, 0, N * 48);
+  const { counts, ids } = computeTiles();
+  device.queue.writeBuffer(tileCountsBuf, 0, counts);
+  device.queue.writeBuffer(tileIdsBuf, 0, ids);
+
+  const enc = device.createCommandEncoder();
+
+  const pass = enc.beginComputePass();
+  pass.setPipeline(computePipeline);
+  pass.setBindGroup(0, computeBG0);
+  pass.setBindGroup(1, computeBG1);
+  pass.dispatchWorkgroups(Math.ceil(W / 16), Math.ceil(H / 16));
+  pass.end();
+
+  const rp = enc.beginRenderPass({
+    colorAttachments: [{
+      view: ctx.getCurrentTexture().createView(),
+      loadOp: "clear", storeOp: "store", clearValue: { r: 0, g: 0, b: 0, a: 1 },
+    }],
+  });
+  rp.setPipeline(renderPipeline);
+  rp.setBindGroup(0, renderBG);
+  rp.draw(6);
+  rp.end();
+
+  device.queue.submit([enc.finish()]);
+
+  frameCount++;
+  const now = performance.now();
+  if (now - lastFpsTime >= 1000) {
+    fps = frameCount / ((now - lastFpsTime) / 1000);
+    frameCount = 0;
+    lastFpsTime = now;
+  }
+  hud.textContent = `${N} items | ${tilesX}x${tilesY} tiles (${DISPATCH_TILE}px) | ${fps.toFixed(0)} fps`;
+
+  requestAnimationFrame(frame);
+}
+
+// Controls
+document.querySelectorAll("#controls button").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelector("#controls .active")?.classList.remove("active");
+    btn.classList.add("active");
+    N = parseInt(btn.dataset.n);
+    generateItems();
+  });
+});
+
+requestAnimationFrame(frame);
+  </script>
+</body>
+</html>
