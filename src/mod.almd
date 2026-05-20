@@ -20,8 +20,10 @@ import snaidhm.web.gpu as gpu
 var cached_scene: snaidhm.SceneHandle = {
   device: 0, width: 0, height: 0, viewport_tiles_x: 0, viewport_tiles_y: 0,
   content_tiles_x: 0, content_tiles_y: 0,
+  dispatch_tiles_x: 0, dispatch_tiles_y: 0,
   params_buf: 0, regions_buf: 0, pixel_buf: 0, items_buf: 0,
-  compute_pipeline: 0, compute_bg: 0, compute_regions_bg: 0,
+  tile_counts_buf: 0, tile_ids_buf: 0,
+  compute_pipeline: 0, compute_bg: 0, compute_regions_bg: 0, compute_tile_bg: 0,
   quad_pipeline: 0, quad_bg: 0, quad_regions_bg: 0, quad_bg_tex: 0,
   img_pipeline: 0, img_bg: 0, img_vtx: 0, img_idx: 0, img_count: 0, format: 0,
 }
@@ -97,6 +99,35 @@ fn upload_visible() -> Unit = {
   }
   let gpu_count = list.len(xs)
   snaidhm.upload_items(cached_scene, gpu_count, xs, ys, ws, hs, bg_rs, bg_gs, bg_bs, bg_as, roundeds, opacities, scrollables)
+
+  // Tile assignment for tile-based dispatch
+  let dtx = cached_scene.dispatch_tiles_x
+  let dty = cached_scene.dispatch_tiles_y
+  let tile_count = dtx * dty
+  var tile_counts: List[Int] = list.repeat(0, int.max(1, tile_count))
+  var tile_ids: List[Int] = list.repeat(0, int.max(1, tile_count * 32))
+  let tile_size_f = int.to_float(64)
+  for i in 0..gpu_count {
+    let ix = xs[i]
+    let iy = ys[i]
+    let iw = ws[i]
+    let ih = hs[i]
+    let tx0 = int.max(0, float.to_int(float.floor(ix / tile_size_f)))
+    let ty0 = int.max(0, float.to_int(float.floor(iy / tile_size_f)))
+    let tx1 = int.min(dtx - 1, float.to_int(float.floor((ix + iw) / tile_size_f)))
+    let ty1 = int.min(dty - 1, float.to_int(float.floor((iy + ih) / tile_size_f)))
+    for ty in ty0..=ty1 {
+      for tx in tx0..=tx1 {
+        let tid = ty * dtx + tx
+        let c = tile_counts[tid]
+        if c < 32 then {
+          tile_ids[tid * 32 + c] = i
+          tile_counts[tid] = c + 1
+        } else ()
+      }
+    }
+  }
+  snaidhm.upload_tile_assignment(cached_scene, tile_counts, tile_ids)
 }
 
 // ══════════════════════════════════════════════════════════════
