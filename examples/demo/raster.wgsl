@@ -86,11 +86,6 @@ fn evaluate_paint(paint: Paint, p: vec2<f32>) -> vec4<f32> {
 
 const MAX_CMDS_PER_TILE: u32 = 8u;
 const MAX_SCROLL_REGIONS: u32 = 8u;
-// Tile-based item dispatch (group 3 — compute only, avoids group 2 conflict with bg_texture)
-@group(3) @binding(0) var<storage, read>       tile_item_counts: array<u32>;
-@group(3) @binding(1) var<storage, read>       tile_item_ids: array<u32>;
-const DISPATCH_TILE: u32 = 64u;
-const MAX_ITEMS_PER_TILE: u32 = 32u;
 
 fn seg_area(p0: vec2<f32>, p1: vec2<f32>) -> f32 {
   let y = p0.y;
@@ -135,36 +130,34 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
   // Viewport-sized buffer: items positioned at viewport-relative coords
   if (px >= params.width || py >= params.height) { return; }
 
-  // ── Tile-based item dispatch (tile buffers in group 0 bindings 8-9) ──
-  let dispatch_tiles_x = (params.width + DISPATCH_TILE - 1u) / DISPATCH_TILE;
-  let dtx = px / DISPATCH_TILE;
-  let dty = py / DISPATCH_TILE;
-  let tile_id = dty * dispatch_tiles_x + dtx;
-  let ri_count = tile_item_counts[tile_id];
-
+  // ── Render items: content-space items + scroll_y offset ──
+  let ri_count = u32(render_items[2].w);
   if ri_count > 0u {
     var color = vec3<f32>(0.0);
     var alpha = 0.0;
 
-    for (var i = 0u; i < min(ri_count, MAX_ITEMS_PER_TILE); i++) {
-      let ri = tile_item_ids[tile_id * MAX_ITEMS_PER_TILE + i];
-      let pos = render_items[ri * 3u];
-      let col = render_items[ri * 3u + 1u];
-      let item_meta = render_items[ri * 3u + 2u];
+    for (var ri = 0u; ri < min(ri_count, 256u); ri++) {
+      let pos = render_items[ri * 3u];       // x, y, w, h (content-space)
+      let col = render_items[ri * 3u + 1u];  // bg_r, bg_g, bg_b, bg_a
+      let item_meta = render_items[ri * 3u + 2u]; // rounded, opacity, 0, count
 
       let ix = pos.x;
-      let scrollable = item_meta.z;
+      let scrollable = item_meta.z;  // 1.0 = list item (scrolls), 0.0 = fixed
       let iy = pos.y + params.scroll_y * scrollable;
       let iw = pos.z; let ih = pos.w;
 
       if iw < 1.0 || ih < 1.0 || col.w < 0.01 { continue; }
+
+      // Item-level viewport cull (skip entire item if off-screen)
       if iy + ih < 0.0 || iy > f32(params.height) { continue; }
       if ix + iw < 0.0 || ix > f32(params.width) { continue; }
 
+      // Clip scrollable items to list frame
       if scrollable > 0.5 {
         if f32(py) < params.list_clip_top || f32(py) >= params.list_clip_bottom { continue; }
       }
 
+      // Pixel-level AABB reject (cheaper than SDF)
       let fpx = f32(px);
       let fpy = f32(py);
       if fpx < ix || fpx > ix + iw || fpy < iy || fpy > iy + ih { continue; }
@@ -182,13 +175,6 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
       }
     }
     pixels[py * params.width + px] = pack_color(color.x, color.y, color.z, alpha);
-    return;
-  }
-
-  // Empty tile in items mode: write same as old path background (opaque dark)
-  let global_item_count = u32(render_items[2].w);
-  if global_item_count > 0u {
-    pixels[py * params.width + px] = pack_color(0.0, 0.0, 0.0, 0.0);
     return;
   }
 
@@ -295,35 +281,15 @@ fn scrollbar_sdf(px_pos: vec2<f32>, thumb_center: vec2<f32>, thumb_half: vec2<f3
   return sd_rounded_box(px_pos - thumb_center, thumb_half, corner_r);
 }
 
-// GPU glass: box blur compositing bg_texture + content items
-fn sample_composited(cx: i32, cy: i32, content_w: u32, content_h: u32, vp_w: f32, vp_h: f32, scroll_x: f32, scroll_y: f32) -> vec3<f32> {
-  // Convert content coord to viewport UV for bg sampling
-  let vp_x = f32(cx) + scroll_x;
-  let vp_y = f32(cy) + scroll_y;
-  let bg_uv = vec2<f32>(vp_x / vp_w, vp_y / vp_h);
-  let bg = textureSampleLevel(bg_texture, bg_sampler, clamp(bg_uv, vec2(0.0), vec2(1.0)), 0.0);
-  var color = bg.xyz;
-
-  // Composite content item on top
-  let rx = u32(clamp(cx, 0, i32(content_w) - 1));
-  let ry = u32(clamp(cy, 0, i32(content_h) - 1));
-  if cx >= 0 && cy >= 0 && cx < i32(content_w) && cy < i32(content_h) {
-    let p = render_pixels[ry * content_w + rx];
-    let ir = f32(p & 0xFFu) / 255.0;
-    let ig = f32((p >> 8u) & 0xFFu) / 255.0;
-    let ib = f32((p >> 16u) & 0xFFu) / 255.0;
-    let ia = f32((p >> 24u) & 0xFFu) / 255.0;
-    color = mix(color, vec3(ir, ig, ib), ia);
-  }
-  return color;
-}
-
-fn blur_at_composited(cx: i32, cy: i32, content_w: u32, content_h: u32, vp_w: f32, vp_h: f32, scroll_x: f32, scroll_y: f32, radius: i32) -> vec3<f32> {
+// GPU glass: backdrop box-blur of the wallpaper, sampled behind translucent
+// glass_card/glass_dark panels (gated by item alpha in fs_fullscreen below).
+fn blur_bg(uv: vec2<f32>, texel: vec2<f32>, radius: i32) -> vec3<f32> {
   var sum = vec3<f32>(0.0);
   var n = 0.0;
-  for (var dy = -radius; dy <= radius; dy += 3) {
-    for (var dx = -radius; dx <= radius; dx += 3) {
-      sum += sample_composited(cx + dx, cy + dy, content_w, content_h, vp_w, vp_h, scroll_x, scroll_y);
+  for (var dy = -radius; dy <= radius; dy += 2) {
+    for (var dx = -radius; dx <= radius; dx += 2) {
+      let sample_uv = clamp(uv + vec2<f32>(f32(dx), f32(dy)) * texel, vec2(0.0), vec2(1.0));
+      sum += textureSampleLevel(bg_texture, bg_sampler, sample_uv, 0.0).xyz;
       n += 1.0;
     }
   }
@@ -344,12 +310,6 @@ fn fs_fullscreen(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
   let px_u = u32(uv.x * w);
   let py_u = u32(uv.y * h);
 
-  // ── Background: texture sample at viewport UV (fixed, doesn't scroll) ──
-  let bg_sample = textureSample(bg_texture, bg_sampler, uv);
-  var r = bg_sample.x;
-  var g = bg_sample.y;
-  var b = bg_sample.z;
-
   // Read items from viewport-sized pixel buffer (already scroll-positioned)
   let idx = py_u * w_u + px_u;
   let packed = render_pixels[idx];
@@ -357,10 +317,33 @@ fn fs_fullscreen(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
   let item_g = f32((packed >> 8u) & 0xFFu) / 255.0;
   let item_b = f32((packed >> 16u) & 0xFFu) / 255.0;
   let item_a = f32((packed >> 24u) & 0xFFu) / 255.0;
+
+  // ── Background: texture sample at viewport UV (fixed, doesn't scroll) ──
+  // Under a glass_card/glass_dark panel, use a blurred + slightly lightened
+  // backdrop sample instead of the sharp wallpaper (frosted-glass look).
+  var bg_rgb: vec3<f32>;
+  if item_a > 0.02 {
+    let texel = vec2<f32>(1.0 / w, 1.0 / h);
+    bg_rgb = mix(blur_bg(uv, texel, 9), vec3<f32>(1.0), 0.05);
+  } else {
+    bg_rgb = textureSampleLevel(bg_texture, bg_sampler, uv, 0.0).xyz;
+  }
+  var r = bg_rgb.x;
+  var g = bg_rgb.y;
+  var b = bg_rgb.z;
+
   // Alpha composite: items over background
   r = mix(r, item_r, item_a);
   g = mix(g, item_g, item_a);
   b = mix(b, item_b, item_a);
+
+  // ── Glass edge rim: thin highlight along card boundaries ──
+  // glass_card/glass_dark fills are near-transparent (alpha ~0.08-0.18), so
+  // the fill alone barely reads as a panel — a bright rim at the alpha
+  // gradient (card edge) gives the glass a visible, defined boundary.
+  let edge = length(vec2<f32>(dpdx(item_a), dpdy(item_a)));
+  let rim = smoothstep(0.0, 0.5, edge) * 0.35;
+  r += rim; g += rim; b += rim;
 
   // ── Hover highlight (fragment, O(1)) ──
   let hover_ri = i32(render_params.hover_item_idx);
