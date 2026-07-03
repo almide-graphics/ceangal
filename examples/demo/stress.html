@@ -29,7 +29,7 @@ const hud = document.getElementById("hud");
 const W = canvas.width, H = canvas.height;
 
 const DISPATCH_TILE = 64;
-const MAX_ITEMS_PER_TILE = 32;
+const MAX_ITEMS_PER_TILE = 1024;  // per-tile capacity; 32 dropped items in dense scenes (tile-aligned holes)
 
 const adapter = await navigator.gpu?.requestAdapter();
 if (!adapter) { hud.textContent = "WebGPU not supported"; throw new Error("no gpu"); }
@@ -41,7 +41,7 @@ ctx.configure({ device, format, alphaMode: "opaque" });
 // Load raster.wgsl and extract only the compute entry point bindings we need
 // We create a minimal shader for the stress test
 const shaderCode = `
-const MAX_PER_TILE: u32 = 32u;
+const MAX_PER_TILE: u32 = ${MAX_ITEMS_PER_TILE}u;
 const DISPATCH_TILE: u32 = 64u;
 
 struct Params {
