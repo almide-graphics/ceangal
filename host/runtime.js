@@ -231,7 +231,10 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl, hooks = {}) {
   const ctx = {
     exports: ex,
     gpu: _gpu,
-    device: _gpu.register(_device),
+    // The handle as the WASM side takes it — an i64, so a BigInt. Handing out
+    // the raw Number makes every `ctx.exports.f(ctx.device, …)` throw
+    // `Cannot convert Number to BigInt` at the boundary.
+    device: B(_gpu.register(_device)),
     canvas,
     registerShader: (code) => _gpu.registerShader(code),
     /// Draw ceangal's UI. An app's onFrame calls this where it wants the UI in
@@ -239,13 +242,32 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl, hooks = {}) {
     drawUI: () => ex.flush?.(),
   };
 
-  if (hooks.onReady) await hooks.onReady(ctx);
+  if (hooks.onReady) {
+    // An app hook that throws must not take the whole boot down silently: the
+    // caller's `init(...)` is usually not awaited, so the rejection surfaces as
+    // an unhandled promise and the page simply does nothing.
+    try {
+      await hooks.onReady(ctx);
+    } catch (e) {
+      console.error("[ceangal] onReady failed — the app layer did not start:", e);
+      hooks.onError?.(e);
+    }
+  }
 
   if (hooks.onFrame) {
     const t0 = performance.now();
+    let reported = false;
     const appFrame = () => {
-      _gpu.beginFrame();
-      hooks.onFrame(ctx, (performance.now() - t0) / 1000);
+      try {
+        _gpu.beginFrame();
+        hooks.onFrame(ctx, (performance.now() - t0) / 1000);
+      } catch (e) {
+        if (!reported) {
+          reported = true;
+          console.error("[ceangal] onFrame threw:", e);
+          hooks.onError?.(e);
+        }
+      }
       requestAnimationFrame(appFrame);
     };
     requestAnimationFrame(appFrame);
