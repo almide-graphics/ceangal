@@ -81,6 +81,13 @@ await init("app.wasm", canvas, overlay, textarea, {
     ctx.drawUI();                          // ceangal composites on top
   },
   onResize(ctx, w, h) { ctx.exports.my_resize(ctx.device, w, h); },
+  onError(e) { /* a hook threw; ceangal reports rather than swallowing */ },
+
+  // "wallpaper" (default) paints ceangal's backdrop; "transparent" leaves it
+  // clear, which an app rendering its own layer underneath the UI wants — the
+  // 2D shader takes its coverage from that texture's alpha where no item sits,
+  // so an opaque backdrop makes the UI opaque and erases what is below.
+  background: "transparent",
 });
 ```
 

@@ -117,6 +117,9 @@ export function beginFrame() { _gpu?.beginFrame(); }
 /// An app that supplies `onFrame` owns the frame: ceangal draws when asked, so
 /// the app decides the order its pass and ceangal's compose in.
 export async function init(wasmUrl, canvas, overlayEl, textareaEl, hooks = {}) {
+  // "wallpaper" (default) paints ceangal's procedural backdrop; "transparent"
+  // leaves it clear so an app's own layer shows through the UI.
+  const background = hooks.background ?? "wallpaper";
   if (!navigator.gpu) throw new Error("WebGPU not supported");
 
   const adapter = await navigator.gpu.requestAdapter();
@@ -156,16 +159,21 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl, hooks = {}) {
   const bgSampObj = _device.createSampler({ magFilter: "linear", minFilter: "linear", addressModeU: "clamp-to-edge", addressModeV: "clamp-to-edge" });
   let bgTex;
   {
-    // Procedural wallpaper fallback
+    // Backdrop. An app that renders its own layer underneath the UI (a 3D
+    // pass) asks for `transparent` — the coverage the 2D shader reports is
+    // taken from this texture's alpha where no item sits, so an opaque
+    // wallpaper makes the UI opaque and erases whatever is below it.
     const W = 512, H = 512;
     const c = document.createElement("canvas"); c.width = W; c.height = H;
     const ctx = c.getContext("2d");
-    ctx.fillStyle = "#0a0e1a"; ctx.fillRect(0, 0, W, H);
-    for (const b of [
+    if (background === "wallpaper") {
+      ctx.fillStyle = "#0a0e1a"; ctx.fillRect(0, 0, W, H);
+    }
+    for (const b of background === "wallpaper" ? [
       { x: 0.2, y: 0.3, r: 0.6, c: "rgba(90,20,140,0.7)" },
       { x: 0.8, y: 0.2, r: 0.5, c: "rgba(20,60,160,0.6)" },
       { x: 0.5, y: 0.8, r: 0.7, c: "rgba(10,100,120,0.5)" },
-    ]) {
+    ] : []) {
       const grad = ctx.createRadialGradient(b.x*W, b.y*H, 0, b.x*W, b.y*H, b.r*W);
       grad.addColorStop(0, b.c); grad.addColorStop(1, "transparent");
       ctx.fillStyle = grad; ctx.fillRect(0, 0, W, H);
