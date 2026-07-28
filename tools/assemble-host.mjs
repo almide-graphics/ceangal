@@ -84,14 +84,23 @@ for (const hostDir of pkgs) {
   }
 }
 
-// Anything served that no package claims is a fork waiting to happen.
+// Anything served that neither a package nor the consumer claims is a fork
+// waiting to happen. The consumer declares its OWN files in `<dest>/OWNED`;
+// without that the app's own code reads as unclaimed.
 if (check && problems.length === 0) {
   const claimed = new Set(provenance.map((l) => l.split(/\s+/)[0]));
+  const ownedPath = join(dest, "OWNED");
+  if (existsSync(ownedPath)) {
+    const text = await readFile(ownedPath, "utf8");
+    for (const l of text.split("\n").map((x) => x.trim())) {
+      if (l && !l.startsWith("#")) claimed.add(l);
+    }
+  }
   const served = await readdir(dest).catch(() => []);
   for (const f of served) {
-    if (f === ".provenance" || f.startsWith(".")) continue;
+    if (f.startsWith(".") || f === "OWNED") continue;
     if (/\.(js|wgsl|ttf)$/.test(f) && !claimed.has(f)) {
-      problems.push(`${f} is served but owned by no package — add it to a MANIFEST or delete it`);
+      problems.push(`${f} is served but claimed by neither a package MANIFEST nor ${dest}/OWNED`);
     }
   }
 }
