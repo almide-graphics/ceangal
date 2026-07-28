@@ -1,39 +1,33 @@
-// ceangal v2 runtime — clean single-loop architecture
+// ceangal's browser host.
 //
 // Rules:
 //   1. ONE rAF loop (ScrollAnimator only)
 //   2. ZERO DOM creation during scroll (transform only)
 //   3. State change → rebuild DOM overlay
 //   4. Scroll → WASM physics + GPU draw (no tree ops)
+//
+// The `gpu` namespace is NOT implemented here — it belongs to snaidhm, which
+// declares it, and arrives as `./gpu.js` from snaidhm's own host package. This
+// file owns the UI half: the DOM overlay, fonts, and the frame loop.
 
+import { createGpuHost } from "./gpu.js";
 import { TTFFont } from "./ttf.js";
 import { generateSDFAtlas } from "./sdf.js";
 
-// ── Handle table (GPU objects = opaque ints in WASM) ──
-
-const handles = [null];
-const h = (obj) => { handles.push(obj); return handles.length - 1; };
-const g = (id) => handles[Number(id)];
+// DOM elements are their own handle space. GPU handles live in snaidhm's host
+// and the two never cross on the wasm side, so they do not share a table.
+const domHandles = [null];
+const h = (obj) => { domHandles.push(obj); return domHandles.length - 1; };
+const g = (id) => domHandles[Number(id)];
 const B = (n) => BigInt(n);
 const N = (b) => Number(b);
 
 let _device, _context, _format, _wasmMemory;
-// When an app's own pass has already cleared the colour target this frame,
-// ceangal's pass must LOAD rather than clear or it erases that pass's output.
-// Set by `begin_render_pass_3d`; the app's render loop resets it per frame via
-// `window.ceangalBeginFrame()`.
-let _clearedThisFrame = false;
-// Depth target for the optional 3D pass, recreated whenever the drawing buffer
-// resizes. Null until `set_depth_size` is called.
-let _depth = null;
+let _gpu = null;
 let _font = null, _atlas = null;
 
 const strings = [];
 let strBuf = [];
-let _dataChunks = [];
-let _dataIsF32 = [];
-let _bindingEntries = [];
-let SHADERS = [];
 
 
 // ── WASM import namespaces ──
@@ -54,194 +48,6 @@ function createDomImports() {
     get_offset_width(elId) { return g(elId).offsetWidth; },
     clear_children(elId) { g(elId).innerHTML = ""; },
     log(strId) { console.log("[ceangal]", strings[N(strId)]); },
-  };
-}
-
-function createGpuImports(canvas) {
-  return {
-    get_preferred_format: () => B(h(_format)),
-    configure_canvas(deviceId, _fmtId) {
-      _context = canvas.getContext("webgpu");
-      _context.configure({ device: g(deviceId), format: _format, alphaMode: "premultiplied" });
-      return B(h(_context));
-    },
-    create_shader(deviceId, shaderId, _) {
-      return B(h(g(deviceId).createShaderModule({ code: SHADERS[N(shaderId)] || SHADERS[0] })));
-    },
-    create_buffer(deviceId, size, usage) {
-      return B(h(g(deviceId).createBuffer({ size: N(size), usage: N(usage) })));
-    },
-    write_buffer(deviceId, bufferId, dataPtr, dataLen) {
-      g(deviceId).queue.writeBuffer(g(bufferId), 0, new Uint8Array(_wasmMemory.buffer, N(dataPtr), N(dataLen)));
-    },
-    write_f32_at(deviceId, bufferId, byteOffset, value) {
-      g(deviceId).queue.writeBuffer(g(bufferId), N(byteOffset), new Float32Array([value]));
-    },
-    write_u32_at(deviceId, bufferId, byteOffset, value) {
-      g(deviceId).queue.writeBuffer(g(bufferId), N(byteOffset), new Uint32Array([N(value)]));
-    },
-    create_compute_pipeline(deviceId, shaderId, _) {
-      const p = g(deviceId).createComputePipeline({ layout: "auto", compute: { module: g(shaderId), entryPoint: "fine" } });
-      return B(h(p));
-    },
-    create_render_pipeline(deviceId, shaderId, _vp, _vl, _fp, _fl, _fmt) {
-      return B(h(g(deviceId).createRenderPipeline({
-        layout: "auto",
-        vertex: { module: g(shaderId), entryPoint: "vs_fullscreen" },
-        // Blend, so the pass composites over whatever is already in the target
-        // instead of overwriting it. Without this the coverage the fragment
-        // shader reports is discarded and the layer is always opaque.
-        fragment: { module: g(shaderId), entryPoint: "fs_fullscreen", targets: [{ format: _format, blend: {
-          color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha", operation: "add" },
-          alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" },
-        }}] },
-        primitive: { topology: "triangle-list" },
-      })));
-    },
-    create_text_pipeline(deviceId, shaderId, _fmt) {
-      return B(h(g(deviceId).createRenderPipeline({
-        layout: "auto",
-        vertex: { module: g(shaderId), entryPoint: "vs_main", buffers: [{ arrayStride: 32, attributes: [
-          { shaderLocation: 0, offset: 0, format: "float32x2" },
-          { shaderLocation: 1, offset: 8, format: "float32x2" },
-          { shaderLocation: 2, offset: 16, format: "float32x4" },
-        ]}] },
-        fragment: { module: g(shaderId), entryPoint: "fs_main", targets: [{ format: _format, blend: {
-          color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha", operation: "add" },
-          alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" },
-        }}] },
-        primitive: { topology: "triangle-list" },
-      })));
-    },
-    create_image_pipeline(deviceId, shaderId, _fmt) {
-      return B(h(g(deviceId).createRenderPipeline({
-        layout: "auto",
-        vertex: { module: g(shaderId), entryPoint: "vs_main", buffers: [{ arrayStride: 16, attributes: [
-          { shaderLocation: 0, offset: 0, format: "float32x2" },
-          { shaderLocation: 1, offset: 8, format: "float32x2" },
-        ]}] },
-        fragment: { module: g(shaderId), entryPoint: "fs_main", targets: [{ format: _format, blend: {
-          color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha", operation: "add" },
-          alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" },
-        }}] },
-        primitive: { topology: "triangle-list" },
-      })));
-    },
-    begin_bindings() { _bindingEntries = []; },
-    add_buffer_binding(bufferId) { _bindingEntries.push({ kind: "buffer", obj: g(bufferId) }); },
-    add_texture_binding(textureId) { _bindingEntries.push({ kind: "texture", obj: g(textureId) }); },
-    add_sampler_binding(samplerId) { _bindingEntries.push({ kind: "sampler", obj: g(samplerId) }); },
-    create_bound_group(deviceId, pipelineId, groupIdx) {
-      const layout = g(pipelineId).getBindGroupLayout(N(groupIdx));
-      const entries = _bindingEntries.map((e, i) => {
-        if (e.kind === "buffer") return { binding: i, resource: { buffer: e.obj } };
-        if (e.kind === "texture") return { binding: i, resource: e.obj.createView() };
-        if (e.kind === "sampler") return { binding: i, resource: e.obj };
-      });
-      _bindingEntries = [];
-      return B(h(g(deviceId).createBindGroup({ layout, entries })));
-    },
-    set_bind_group(passId, index, bgId) { g(passId).setBindGroup(N(index), g(bgId)); },
-    begin_encoder: (deviceId) => B(h(g(deviceId).createCommandEncoder())),
-    begin_compute_pass: (encoderId) => B(h(g(encoderId).beginComputePass())),
-    dispatch_workgroups(passId, x, y, z) {
-      g(passId).dispatchWorkgroups(N(x), N(y), N(z));
-    },
-    begin_render_pass(encoderId, r, g_, b, a) {
-      return B(h(g(encoderId).beginRenderPass({
-        colorAttachments: [{ view: _context.getCurrentTexture().createView(),
-          clearValue: { r, g: g_, b, a },
-          loadOp: _clearedThisFrame ? "load" : "clear", storeOp: "store" }],
-      })));
-    },
-    set_pipeline(passId, pipelineId) { g(passId).setPipeline(g(pipelineId)); },
-    draw(passId, n) { g(passId).draw(N(n)); },
-    set_vertex_buffer(passId, slot, bufferId) { g(passId).setVertexBuffer(N(slot), g(bufferId)); },
-    set_index_buffer(passId, bufferId) { g(passId).setIndexBuffer(g(bufferId), "uint32"); },
-    draw_indexed(passId, count) { g(passId).drawIndexed(N(count)); },
-    end_pass(passId) { g(passId).end(); },
-    finish_and_submit(deviceId, encoderId) { g(deviceId).queue.submit([g(encoderId).finish()]); },
-    begin_data() { _dataChunks = []; _dataIsF32 = []; },
-    push_f32(v) { _dataChunks.push(v); _dataIsF32.push(true); },
-    push_u32(v) { _dataChunks.push(N(v)); _dataIsF32.push(false); },
-    flush_to_buffer(deviceId, bufferId) {
-      const buf = new ArrayBuffer(_dataChunks.length * 4);
-      const f32 = new Float32Array(buf);
-      const u32 = new Uint32Array(buf);
-      for (let i = 0; i < _dataChunks.length; i++) {
-        if (_dataIsF32[i]) f32[i] = _dataChunks[i]; else u32[i] = _dataChunks[i];
-      }
-      g(deviceId).queue.writeBuffer(g(bufferId), 0, new Uint8Array(buf));
-      _dataChunks = []; _dataIsF32 = [];
-    },
-    // ── Optional 3D pass ──
-    //
-    // ceangal's own pipeline is a fullscreen quad with no vertex buffers and no
-    // depth attachment, so a mesh cannot go through it. These are the entry
-    // points an app needs to render geometry UNDER the 2D layer, declared
-    // against the same `gpu` namespace snaidhm owns. Pure boundary translation:
-    // no application logic lives here.
-
-    set_depth_size(deviceId, w, h) {
-      const width = Math.max(1, N(w)), height = Math.max(1, N(h));
-      if (_depth && _depth.width === width && _depth.height === height) return;
-      if (_depth) _depth.tex.destroy();
-      const tex = g(deviceId).createTexture({
-        size: [width, height], format: "depth24plus",
-        usage: GPUTextureUsage.RENDER_ATTACHMENT,
-      });
-      _depth = { tex, view: tex.createView(), width, height };
-    },
-
-    // Fixed mesh vertex layout: pos(3) + normal(3) + uv(2), 32-byte stride,
-    // depth-tested with `less`, back faces culled, glTF's CCW front.
-    create_mesh_pipeline(deviceId, shaderId, _fmt) {
-      return B(h(g(deviceId).createRenderPipeline({
-        layout: "auto",
-        vertex: {
-          module: g(shaderId), entryPoint: "vs_main",
-          buffers: [{ arrayStride: 32, attributes: [
-            { shaderLocation: 0, offset: 0, format: "float32x3" },
-            { shaderLocation: 1, offset: 12, format: "float32x3" },
-            { shaderLocation: 2, offset: 24, format: "float32x2" },
-          ]}],
-        },
-        fragment: { module: g(shaderId), entryPoint: "fs_main", targets: [{ format: _format }] },
-        primitive: { topology: "triangle-list", cullMode: "back", frontFace: "ccw" },
-        depthStencil: { format: "depth24plus", depthWriteEnabled: true, depthCompare: "less" },
-      })));
-    },
-
-    // begin_render_pass with the depth attachment bound. `load` chooses whether
-    // the colour target is cleared (0) or preserved (1). Depth always clears.
-    begin_render_pass_3d(encoderId, r, g_, b, a, load) {
-      if (!_depth) throw new Error("begin_render_pass_3d before set_depth_size");
-      if (N(load) !== 1) _clearedThisFrame = true;
-      return B(h(g(encoderId).beginRenderPass({
-        colorAttachments: [{
-          view: _context.getCurrentTexture().createView(),
-          clearValue: { r, g: g_, b, a },
-          loadOp: N(load) === 1 ? "load" : "clear", storeOp: "store",
-        }],
-        depthStencilAttachment: {
-          view: _depth.view, depthClearValue: 1.0,
-          depthLoadOp: "clear", depthStoreOp: "store",
-        },
-      })));
-    },
-
-    // u16 indices — half the bandwidth of the u32 path, and glTF's common case.
-    set_index_buffer_u16(passId, bufferId) { g(passId).setIndexBuffer(g(bufferId), "uint16"); },
-
-    // Upload from linear memory at an offset, so geometry built in a Bytes
-    // arena reaches the GPU without an intermediate copy.
-    write_buffer_at(deviceId, bufferId, dstOffset, srcPtr, len) {
-      g(deviceId).queue.writeBuffer(g(bufferId), N(dstOffset),
-        new Uint8Array(_wasmMemory.buffer, N(srcPtr), N(len)));
-    },
-
-    log_int(v) { console.log("[gpu]", N(v)); },
-    log_str(ptr, len) { console.log("[gpu]", new TextDecoder().decode(new Uint8Array(_wasmMemory.buffer, N(ptr), N(len)))); },
   };
 }
 
@@ -285,19 +91,13 @@ class ScrollAnimator {
 // Init
 // ══════════════════════════════════════════════════════════════
 
-/// Register an app-supplied WGSL module and return the index `create_shader`
-/// resolves it by. The built-in shaders occupy the low indices; an app that
-/// renders its own pass (a mesh, say) adds its module here instead of forking
-/// this file.
-export function registerShader(code) {
-  SHADERS.push(code);
-  return SHADERS.length - 1;
-}
+/// Append an app-supplied WGSL module; returns the index `create_shader`
+/// resolves it by. Delegates to snaidhm's host, which owns the shader table.
+export function registerShader(code) { return _gpu.registerShader(code); }
 
-/// Call at the top of each frame when the app drives its own render loop: it
-/// resets the per-frame clear ownership so ceangal's pass clears again when the
-/// app's 3D pass did not run.
-export function beginFrame() { _clearedThisFrame = false; }
+/// Reset per-frame clear ownership. Call at the top of every frame when the app
+/// drives its own render loop.
+export function beginFrame() { _gpu?.beginFrame(); }
 
 export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   if (!navigator.gpu) throw new Error("WebGPU not supported");
@@ -308,6 +108,10 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   });
   _format = navigator.gpu.getPreferredCanvasFormat();
 
+  // snaidhm owns the `gpu` namespace; everything GPU-side goes through its host.
+  _gpu = createGpuHost(canvas);
+  _gpu.setFormat(_format);
+
   // Load resources
   const [rasterCode, textCode, imageCode, fontBuffer] = await Promise.all([
     fetch("./raster.wgsl?v=" + Date.now()).then(r => r.text()),
@@ -315,7 +119,10 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
     fetch("./image.wgsl?v=" + Date.now()).then(r => r.text()),
     fetch("./font.ttf").then(r => r.arrayBuffer()),
   ]);
-  SHADERS = [rasterCode, rasterCode, textCode, imageCode];
+  // Index order is the contract create_shader resolves against: snaidhm asks
+  // for 0 (raster), 2 (text) and 3 (image); 1 is a spare that falls back to
+  // raster. An app adds its own module with registerShader().
+  for (const code of [rasterCode, rasterCode, textCode, imageCode]) _gpu.registerShader(code);
 
   _font = new TTFFont(fontBuffer);
   const chars = []; for (let i = 32; i < 127; i++) chars.push(String.fromCharCode(i));
@@ -356,17 +163,19 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   const imports = {
     wasi_snapshot_preview1: wasi,
     dom: createDomImports(),
-    gpu: createGpuImports(canvas),
+    gpu: _gpu.imports,
     font_data: createFontImports(fontBuffer),
   };
   const { instance } = await WebAssembly.instantiate(await fetch(wasmUrl).then(r => r.arrayBuffer()), imports);
   _wasmMemory = instance.exports.memory;
+  _gpu.setMemory(_wasmMemory);
   if (instance.exports._start) try { instance.exports._start(); } catch (_) {}
 
   const ex = instance.exports;
   window._ceangal = ex;
   const container = canvas.parentElement;
-  const img = { vtx: h(imgVtx), idx: h(imgIdx), tex: h(imgTex), samp: h(imgSamp) };
+  const img = { vtx: _gpu.register(imgVtx), idx: _gpu.register(imgIdx),
+                tex: _gpu.register(imgTex), samp: _gpu.register(imgSamp) };
 
   // ══════════════════════════════════════════════════════════
   // Animator: single rAF loop
@@ -392,9 +201,9 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
     canvas.width = pw; canvas.height = ph;
     _context = canvas.getContext("webgpu");
     _context.configure({ device: _device, format: _format, alphaMode: "premultiplied" });
-    ex.prepare_scene?.(B(h(_device)), B(cw), B(ch), B(pw), B(ph),
+    ex.prepare_scene?.(B(_gpu.register(_device)), B(cw), B(ch), B(pw), B(ph),
       B(img.vtx), B(img.idx), B(0), B(img.tex), B(img.samp),
-      B(h(bgTex)), B(h(bgSampObj)));
+      B(_gpu.register(bgTex)), B(_gpu.register(bgSampObj)));
   }
 
   prepare();

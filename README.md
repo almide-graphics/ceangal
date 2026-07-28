@@ -41,3 +41,31 @@ Active development. Flexbox layout engine complete (74 Yoga-aligned tests passin
 ## License
 
 MIT
+
+## Host
+
+ceangal's browser host lives in `host/`, not inside an example — a consumer that
+had to copy it out of `examples/demo/` is how a downstream copy once diverged
+from this repo and a rendering bug got fixed in the copy instead of the source.
+
+`host/` owns the UI half: the frame loop, the DOM overlay, fonts, and ceangal's
+own shaders. It does **not** implement the `gpu` namespace — that belongs to
+[snaidhm](https://github.com/almide-graphics/snaidhm), which declares it, and
+arrives as `gpu.js` from `snaidhm/host/`.
+
+The toolchain resolves `.almd` modules from dependencies but has no equivalent
+for web host assets, so a page still copies these files. `tools/assemble-host.mjs`
+makes that copy mechanical and checkable:
+
+```sh
+# assemble into the directory you serve
+node tools/assemble-host.mjs examples/demo host ../snaidhm/host
+
+# CI: fail if a served file has drifted from the package that owns it
+node tools/assemble-host.mjs --check examples/demo host ../snaidhm/host
+```
+
+Each package lists what it contributes in `host/MANIFEST`. The assembler writes
+`.provenance` next to the output recording the source commit and hash of every
+file, and `--check` fails on drift in either direction — including a served file
+that no package claims.
