@@ -68,7 +68,7 @@
     <textarea id="ime-input" class="ime-textarea" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" rows="1"></textarea>
   </div>
   <script type="module">
-    import { init } from "./ceangal_runtime.js";
+    import { init } from "./runtime.js";
     // Clear text selection when clicking outside text elements
     document.getElementById("canvas").addEventListener("mousedown", () => {
       window.getSelection()?.removeAllRanges();
