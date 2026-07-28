@@ -99,7 +99,24 @@ export function registerShader(code) { return _gpu.registerShader(code); }
 /// drives its own render loop.
 export function beginFrame() { _gpu?.beginFrame(); }
 
-export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
+/// Boot ceangal against a wasm module.
+///
+/// `hooks` is how an APP extends this without forking the file — which is what
+/// a consumer had to do to render its own 3D layer, and how its copy drifted:
+///
+///   onReady(ctx)        once, after the module is instantiated and the scene
+///                       prepared. Load resources, build pipelines.
+///   onFrame(ctx, t)     every frame BEFORE ceangal's own draw, so an app pass
+///                       renders underneath the UI. `t` is seconds since ready.
+///   onResize(ctx, w, h) after the drawing buffer changes size.
+///
+/// `ctx` carries everything an app needs and nothing it does not:
+///   { exports, gpu, device, canvas, registerShader }
+/// where `device` is the handle the wasm side uses and `gpu` is snaidhm's host.
+///
+/// An app that supplies `onFrame` owns the frame: ceangal draws when asked, so
+/// the app decides the order its pass and ceangal's compose in.
+export async function init(wasmUrl, canvas, overlayEl, textareaEl, hooks = {}) {
   if (!navigator.gpu) throw new Error("WebGPU not supported");
 
   const adapter = await navigator.gpu.requestAdapter();
@@ -208,6 +225,31 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
 
   prepare();
   ex.todo_init_data?.();
+
+  // ── App layer ────────────────────────────────────────────────────────────
+
+  const ctx = {
+    exports: ex,
+    gpu: _gpu,
+    device: _gpu.register(_device),
+    canvas,
+    registerShader: (code) => _gpu.registerShader(code),
+    /// Draw ceangal's UI. An app's onFrame calls this where it wants the UI in
+    /// its own composition order; skipping it draws no UI that frame.
+    drawUI: () => ex.flush?.(),
+  };
+
+  if (hooks.onReady) await hooks.onReady(ctx);
+
+  if (hooks.onFrame) {
+    const t0 = performance.now();
+    const appFrame = () => {
+      _gpu.beginFrame();
+      hooks.onFrame(ctx, (performance.now() - t0) / 1000);
+      requestAnimationFrame(appFrame);
+    };
+    requestAnimationFrame(appFrame);
+  }
 
   // ══════════════════════════════════════════════════════════
   // DOM overlay: built ONCE on state change, scroll via transform
@@ -385,6 +427,7 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
     _resizeTimer = setTimeout(() => {
       animator.stop();
       prepare();
+      hooks.onResize?.(ctx, canvas.width, canvas.height);
       ex.flush?.();
       buildOverlay();
     }, 150);

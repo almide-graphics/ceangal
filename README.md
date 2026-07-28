@@ -65,6 +65,28 @@ node tools/assemble-host.mjs examples/demo host ../snaidhm/host
 node tools/assemble-host.mjs --check examples/demo host ../snaidhm/host
 ```
 
+### Extending without forking
+
+`init` takes hooks so an app adds its own rendering without copying this file —
+which is exactly what a consumer had to do, and how its copy drifted:
+
+```js
+await init("app.wasm", canvas, overlay, textarea, {
+  async onReady(ctx) {
+    const shader = ctx.registerShader(myWgsl);
+    ctx.exports.my_init(ctx.device, canvas.width, canvas.height);
+  },
+  onFrame(ctx, t) {
+    ctx.exports.my_frame(ctx.device, t);  // app pass first — it clears
+    ctx.drawUI();                          // ceangal composites on top
+  },
+  onResize(ctx, w, h) { ctx.exports.my_resize(ctx.device, w, h); },
+});
+```
+
+An app that supplies `onFrame` owns the frame: ceangal draws when asked, so the
+app decides the order its pass and the UI compose in.
+
 Each package lists what it contributes in `host/MANIFEST`. The assembler writes
 `.provenance` next to the output recording the source commit and hash of every
 file, and `--check` fails on drift in either direction — including a served file
