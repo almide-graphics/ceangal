@@ -40,6 +40,17 @@ var cached_items: List[render.RenderItem] = []
 
 // The text field's content as UTF-8.
 var input_buf: List[Int] = []
+// What an input method is composing into the field (code points), and the
+// part of it the method marks, `compose_from ..< compose_to` (-1: no caret).
+// Native only: in the browser the <textarea> composes.
+var compose: List[Int] = []
+var compose_from = -1
+var compose_to = -1
+// The field's caret as `text_layer` last placed it, CSS pixels — where an
+// input method opens its candidate window.
+var caret_x = 0.0
+var caret_y = 0.0
+var caret_h = 0.0
 
 // ══════════════════════════════════════════════════════════════
 // Upload items (ONLY on state change — never during scroll)
@@ -298,6 +309,15 @@ fn type_char(code: Int) -> Unit = {
   input_buf = input_buf + string.to_bytes(string.from_codepoint(code))
 }
 
+/// Show `composing` — what an input method has composed so far, empty when it
+/// is done — at the field's caret, `from ..< to` marked. What it commits comes
+/// through `type_char`.
+fn set_composition(composing: String, from: Int, to: Int) -> Unit = {
+  compose = text.code_points(composing)
+  compose_from = from
+  compose_to = to
+}
+
 /// Delete the field's last character: its trailing continuation bytes
 /// (10xxxxxx) and the byte that leads them.
 fn backspace() -> Unit = {
@@ -410,14 +430,59 @@ fn text_layer(device: Int, layer: text.TextLayer) -> text.TextLayer = {
       l = text.add_run(device, l, text.code_points(item.content), size, x, baseline,
         r, g, b, a, x, top, x + w, bottom)
     } else if item.kind == v.TEXT_FIELD then {
-      let pad = 12.0 * s
-      let empty = list.len(input_buf) == 0
-      let shown = text.code_points(if empty then item.content else string.from_bytes(input_buf))
-      let dim = if empty then 0.5 else 1.0
-      let baseline = y + pad + text.ascent(l, size)
-      l = text.add_run(device, l, shown, size, x + pad, baseline,
-        dim, dim, dim, 1.0, x, y, x + w, y + h)
+      l = field_text(device, l, item.content, size, x, y, w, h, s)
     } else ()
   }
   text.upload(device, l, cached_scene.width, cached_scene.height)
+}
+
+/// The text field's text on `l`: what was typed, then what an input method is
+/// composing, underlined (its marked clause twice as thick), then the caret —
+/// or the placeholder when there is nothing — in the box at `x`, `y`, `w` x
+/// `h` (pixels of the drawable, `s` per CSS pixel).
+fn field_text(device: Int, l: text.TextLayer, placeholder: String, size: Float,
+              x: Float, y: Float, w: Float, h: Float, s: Float) -> text.TextLayer = {
+  let pad = 12.0 * s
+  let typed = text.code_points(string.from_bytes(input_buf))
+  let empty = list.len(typed) == 0 and list.len(compose) == 0
+  let ascent = text.ascent(l, size)
+  let descent = text.descent(l, size)
+  let baseline = y + pad + ascent
+  let left = x + pad
+  var out = l
+  if empty then {
+    out = text.add_run(device, out, text.code_points(placeholder), size, left, baseline,
+      0.5, 0.5, 0.5, 1.0, x, y, x + w, y + h)
+  } else {
+    out = text.add_run(device, out, typed, size, left, baseline, 1.0, 1.0, 1.0, 1.0, x, y, x + w, y + h)
+  }
+  // The composition starts where the typed text ends.
+  let start = left + text.measure(out, typed, size)
+  let line = float.max(1.0, float.round(s))
+  let under = float.round(baseline + descent / 2.0)
+  if list.len(compose) > 0 then {
+    out = text.add_run(device, out, compose, size, start, baseline, 1.0, 1.0, 1.0, 1.0, x, y, x + w, y + h)
+    let end = start + text.measure(out, compose, size)
+    out = text.add_rect(device, out, start, under, float.min(end, x + w), under + line, 0.8, 0.8, 0.85, 1.0)
+    if compose_to > compose_from and compose_from >= 0 then {
+      let m0 = start + text.measure(out, list.take(compose, compose_from), size)
+      let m1 = start + text.measure(out, list.take(compose, compose_to), size)
+      out = text.add_rect(device, out, m0, under, float.min(m1, x + w), under + 2.0 * line, 1.0, 1.0, 1.0, 1.0)
+    } else ()
+  } else ()
+  // The caret: at the end of the composition's marked part, else at the end
+  // of what was typed.
+  let composing = list.len(compose) > 0
+  let at = if composing and compose_to >= 0 then start + text.measure(out, list.take(compose, compose_to), size)
+           else start
+  let cx = float.round(at)
+  let top = float.round(baseline - ascent)
+  let bottom = float.round(baseline + descent)
+  if composing and compose_to < 0 then () else {
+    out = text.add_rect(device, out, cx, top, cx + line, bottom, 1.0, 1.0, 1.0, 0.9)
+  }
+  caret_x = cx / s
+  caret_y = top / s
+  caret_h = (bottom - top) / s
+  out
 }

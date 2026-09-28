@@ -7,7 +7,9 @@
 //
 // Interactive: click a row to toggle it, click below the list to add one,
 // scroll with the wheel or drag the right edge, type into the field and press
-// Enter to add what you typed. Esc saves the current frame to SNAPSHOT.
+// Enter to add what you typed — Japanese through the system's input method,
+// its composition shown underlined in the field. Esc saves the current frame
+// to SNAPSHOT.
 
 import env
 import process
@@ -73,6 +75,9 @@ fn handle_input(start: Input) -> Input = {
     } else if kind == window.TEXT then {
       app.type_char(window.event_code())
       st = { ...st, changed: true }
+    } else if kind == window.COMPOSE then {
+      app.set_composition(window.event_text(), window.event_code(), window.event_end())
+      st = { ...st, changed: true }
     } else if kind == window.KEY then {
       let code = window.event_code()
       if code == window.KEY_ENTER then app.input_submit()
@@ -94,6 +99,9 @@ effect fn main() -> Unit = {
       println("no font found")
       process.exit(1)
     } else ()
+    // The field takes Japanese (and any other) input through the platform's
+    // input method; its candidate window follows the caret.
+    window.set_ime(true)
     let device = 1
     prepare(device)
     app.todo_init_data()
@@ -118,6 +126,7 @@ effect fn main() -> Unit = {
             st = { ...st, animating: app.scroll_step(FRAME_DT) == 1 }
           } else ()
           layer = app.text_layer(device, layer)
+          window.set_ime_area(app.caret_x, app.caret_y, 1.0, app.caret_h)
           app.draw_with_text(layer)
           if st.snapshot then {
             println(if frame.save_png(SNAPSHOT) then "saved ${SNAPSHOT}" else "snapshot failed")
