@@ -119,7 +119,7 @@ test "tick bouncing returns to boundary" {
   let _ = s.create_region(100.0, 200.0, 100.0, 200.0, 0 - 1)
   s.set_pos(0, 0, 50.0) // overscrolled past top
   s.set_state(0, 0, 2) // BOUNCING
-  for _ in 0..200 { let _ = s.tick_all(0.016) }
+  for _ in 0..<200 { let _ = s.tick_all(0.016) }
   assert(approx(s.get_pos(0, 0), 0.0, 1.0))
   assert(s.get_state(0, 0) == 0) // IDLE
 }
@@ -167,9 +167,9 @@ test "scrollbar fades after idle" {
   assert(s.get_bar_opacity(0, 0) == 1.0)
   s.set_state(0, 0, 0) // force IDLE
   s.set_vel(0, 0, 0.0)
-  for _ in 0..82 { let _ = s.tick_all(0.016) }
+  for _ in 0..<82 { let _ = s.tick_all(0.016) }
   assert(s.get_bar_opacity(0, 0) < 1.0)
-  for _ in 0..50 { let _ = s.tick_all(0.016) }
+  for _ in 0..<50 { let _ = s.tick_all(0.016) }
   assert(s.get_bar_opacity(0, 0) < 0.02)
 }
 

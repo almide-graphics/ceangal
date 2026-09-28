@@ -241,7 +241,7 @@ fn diff_tree(old: View, cur: View) -> DiffResult = {
     let old_len = list.len(old._children)
     let cur_len = list.len(cur._children)
     let min_len = int.min(old_len, cur_len)
-    for i in 0..min_len {
+    for i in 0..<min_len {
       let child_diff = diff_tree(old._children[i], cur._children[i])
       rl = rl + child_diff.relayouts
       rp = rp + child_diff.repaints

@@ -7,8 +7,6 @@
 //
 // Design ref: Flutter RenderSliverFixedExtentList
 
-import math
-
 // ── Configuration ──
 
 let BUFFER_SCREENS = 4  // buffer zone: viewport × N on each side
