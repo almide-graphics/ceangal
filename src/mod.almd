@@ -7,6 +7,10 @@
 
 import self.dom as dom
 import self.app as app
+// Not referenced here, but the wasm renderer needs the modules declaring the
+// types that reach this entry (View, Node) imported by it.
+import self.view as _view
+import self.layout as _layout
 
 // ══════════════════════════════════════════════════════════════
 // Mouse effects (fragment-only, no compute re-run)
