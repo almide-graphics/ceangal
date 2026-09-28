@@ -51,19 +51,6 @@ function createDomImports() {
   };
 }
 
-
-function createFontImports(fontBuffer) {
-  const view = new DataView(fontBuffer);
-  return {
-    len: () => B(fontBuffer.byteLength),
-    u8: (offset) => B(view.getUint8(N(offset))),
-    u16be: (offset) => B(view.getUint16(N(offset))),
-    i16be: (offset) => B(view.getInt16(N(offset))),
-    u32be: (offset) => B(view.getUint32(N(offset))),
-    i8: (offset) => B(view.getInt8(N(offset))),
-  };
-}
-
 // ── Scroll animator (single rAF loop) ──
 
 class ScrollAnimator {
@@ -189,7 +176,6 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl, hooks = {}) {
     wasi_snapshot_preview1: wasi,
     dom: createDomImports(),
     gpu: _gpu.imports,
-    font_data: createFontImports(fontBuffer),
   };
   const { instance } = await WebAssembly.instantiate(await fetch(wasmUrl).then(r => r.arrayBuffer()), imports);
   _wasmMemory = instance.exports.memory;

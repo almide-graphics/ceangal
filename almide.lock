@@ -1,3 +1,3 @@
 # almide.lock — auto-generated, do not edit
 
-snaidhm = { git = "https://github.com/almide-graphics/snaidhm.git", ref = "feat/window-input", commit = "b2d916d2725f315b34372f6ad85d89fdb2e8084f" }
+snaidhm = { git = "https://github.com/almide-graphics/snaidhm.git", ref = "feat/cjk-fonts", commit = "850184eeedf396ac85ec12b49a1395e95c5d8c71" }

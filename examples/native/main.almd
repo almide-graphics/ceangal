@@ -10,21 +10,13 @@
 // Enter to add what you typed. Esc saves the current frame to SNAPSHOT.
 
 import env
+import process
 import self.app as app
 import snaidhm.web.gpu as gpu
 import snaidhm.native.window as window
 import snaidhm.native.frame as frame
-import snaidhm.native.font as font
-import snaidhm.ttf as ttf
+import snaidhm.native.fonts as fonts
 import snaidhm.text as text
-
-// TrueType (glyf) fonts a desktop usually has; the first that loads is used.
-let FONTS = [
-  "/System/Library/Fonts/Supplemental/Arial.ttf",
-  "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-  "/usr/share/fonts/TTF/DejaVuSans.ttf",
-  "C:/Windows/Fonts/arial.ttf",
-]
 
 // The scrollbar's grab zone at the right edge, CSS pixels (as the browser host).
 let SCROLLBAR_ZONE = 20.0
@@ -96,13 +88,16 @@ fn handle_input(start: Input) -> Input = {
 effect fn main() -> Unit = {
   let capture = list.get(env.args(), 0)
   if window.open("ceangal", 420, 720) then {
-    if FONTS |> list.any((path) => font.load(path)) then () else {
-      println("no TrueType font found")
-    }
+    // A Latin face, then a Japanese one for what it lacks.
+    let faces = fonts.system()!
+    if list.len(faces) == 0 then {
+      println("no font found")
+      process.exit(1)
+    } else ()
     let device = 1
     prepare(device)
     app.todo_init_data()
-    var layer = app.text_layer(device, text.new_layer(device, ttf.parse_font()))
+    var layer = app.text_layer(device, text.new_layer(device, faces))
     match capture {
       some(path) => {
         app.draw_with_text(layer)
