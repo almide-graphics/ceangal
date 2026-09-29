@@ -1,0 +1,87 @@
+// ceangal on Wayland, in Almide all the way down: the todo app in a window
+// that snaidhm's own Wayland client opens, drawn on the CPU (cpu_paint.almd)
+// into shared memory — no GPU, no winit, no libwayland.
+//
+//   almide run examples/wayland/main.almd            (under a Wayland session)
+//   almide run examples/wayland/main.almd -- 8000    (quit after 8 s)
+//
+// Click the button to add a todo, a row to toggle it; type into the field and
+// press Enter to add what was typed; the wheel or the scrollbar scrolls.
+
+import env
+import self.cpu_paint as paint
+import self.ui as ui
+import snaidhm.cpu.canvas as canvas
+import snaidhm.native.fonts as fonts
+import snaidhm.wayland.window as window
+
+/// Seconds a frame of scroll animation advances.
+let FRAME_DT = 0.016
+
+/// A frame for the window: its pixels, drawn on in CSS pixels.
+fn frame() -> canvas.Canvas = canvas.scaled(window.width(), window.height(), window.scale())
+
+/// The wheel's distance in CSS pixels: Wayland reports 15 per notch (or the
+/// touchpad's own distance), a notch here scrolls three rows' worth.
+fn wheel_px(d: Float) -> Float = d * 4.0
+
+effect fn main() -> Unit = {
+  let limit = match list.get(env.args(), 0) { some(s) => int.parse(s) ?? 0, none => 0 }
+  if window.open("ceangal", 480, 640)! then {
+    let faces = fonts.system()!
+    let start = env.millis()
+    ui.reset(window.extent().0, window.extent().1)
+    ui.todo_init_data()
+    window.present(paint.paint(frame(), faces).px)!
+    var animating = false
+    var dragging = false
+    var going = true
+    while going {
+      going = window.pump(if animating then 16 else if limit > 0 then 200 else 0 - 1)! and (limit == 0 or env.millis() - start < limit)
+      var dirty = false
+      if window.resized() then {
+        ui.set_viewport(window.extent().0, window.extent().1)
+        ui.rebuild()
+        dirty = true
+      } else ()
+      var kind = window.next_event()
+      while kind != window.NONE {
+        let x = window.event_x()
+        let y = window.event_y()
+        if kind == window.MOUSE_MOVE and dragging then {
+          ui.set_scroll_frac((y - ui.list_frame_y()) / ui.list_frame_height())
+          animating = true
+        } else if kind == window.MOUSE_DOWN and window.event_code() == 0 and x > ui.viewport_w - 20.0 then {
+          dragging = true
+        } else if kind == window.MOUSE_UP and window.event_code() == 0 then {
+          if dragging then { dragging = false } else { dirty = ui.click(x, y) or dirty }
+        } else if kind == window.WHEEL then {
+          ui.scroll_wheel(0, 0.0 - wheel_px(window.event_dx()), 0.0 - wheel_px(window.event_dy()))
+          animating = true
+        } else if kind == window.TEXT then {
+          ui.type_char(window.event_code())
+          dirty = true
+        } else if kind == window.KEY then {
+          let k = window.event_code()
+          if k == window.KEY_ENTER then {
+            ui.input_submit()
+            dirty = true
+          } else if k == window.KEY_BACKSPACE then {
+            ui.backspace()
+            dirty = true
+          } else if k == window.KEY_ESCAPE then { going = false } else ()
+        } else ()
+        kind = window.next_event()
+      }
+      if animating then {
+        animating = ui.scroll_step(FRAME_DT) == 1
+        dirty = true
+      } else ()
+      if dirty and going then { window.present(paint.paint(frame(), faces).px)! } else ()
+    }
+    // One last frame for whoever captures the screen.
+    window.present(paint.paint(frame(), faces).px)!
+  } else {
+    println("no Wayland window: needs a Wayland compositor with xdg-shell")
+  }
+}

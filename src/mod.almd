@@ -7,6 +7,7 @@
 
 import self.dom as dom
 import self.app as app
+import self.ui as ui
 // Not referenced here, but the wasm renderer needs the modules declaring the
 // types that reach this entry (View, Node) imported by it.
 import self.view as _view
@@ -44,36 +45,36 @@ fn do_prepare(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int,
 fn scroll_tick(dt: Float) -> Int = app.scroll_tick(dt)
 
 @export(wasm, "scroll_wheel")
-fn scroll_wheel(region: Int, dx: Float, dy: Float) -> Unit = app.scroll_wheel(region, dx, dy)
+fn scroll_wheel(region: Int, dx: Float, dy: Float) -> Unit = ui.scroll_wheel(region, dx, dy)
 
 @export(wasm, "get_scroll_pos")
-fn get_scroll_pos(region: Int, axis: Int) -> Float = app.get_scroll_pos(region, axis)
+fn get_scroll_pos(region: Int, axis: Int) -> Float = ui.get_scroll_pos(region, axis)
 
 @export(wasm, "flush")
 fn flush() -> Unit = app.flush()
 
 @export(wasm, "set_scroll_frac")
-fn set_scroll_frac(frac: Float) -> Unit = app.set_scroll_frac(frac)
+fn set_scroll_frac(frac: Float) -> Unit = ui.set_scroll_frac(frac)
 
 @export(wasm, "get_scroll_info")
-fn get_scroll_info() -> Float = app.get_scroll_info()
+fn get_scroll_info() -> Float = ui.get_scroll_info()
 
 // ══════════════════════════════════════════════════════════════
 // Test helpers
 // ══════════════════════════════════════════════════════════════
 
 @export(wasm, "set_viewport")
-fn set_viewport(w: Float, h: Float) -> Unit = app.set_viewport(w, h)
+fn set_viewport(w: Float, h: Float) -> Unit = ui.set_viewport(w, h)
 
 // ══════════════════════════════════════════════════════════════
 // Text field input (JS writes UTF-8 bytes, then submits)
 // ══════════════════════════════════════════════════════════════
 
 @export(wasm, "input_clear")
-fn input_clear() -> Unit = app.input_clear()
+fn input_clear() -> Unit = ui.input_clear()
 
 @export(wasm, "input_push")
-fn input_push(byte: Int) -> Unit = app.input_push(byte)
+fn input_push(byte: Int) -> Unit = ui.input_push(byte)
 
 @export(wasm, "input_submit")
 fn input_submit() -> Unit = app.input_submit()
@@ -102,51 +103,51 @@ fn s(text: String) -> Int = {
 }
 
 @export(wasm, "get_item_count")
-fn get_item_count() -> Int = list.len(app.cached_items)
+fn get_item_count() -> Int = list.len(ui.items)
 
 @export(wasm, "get_item_x")
-fn get_item_x(i: Int) -> Float = app.cached_items[i].x
+fn get_item_x(i: Int) -> Float = ui.items[i].x
 
 @export(wasm, "get_item_y")
-fn get_item_y(i: Int) -> Float = app.cached_items[i].y
+fn get_item_y(i: Int) -> Float = ui.items[i].y
 
 @export(wasm, "get_item_w")
-fn get_item_w(i: Int) -> Float = app.cached_items[i].w
+fn get_item_w(i: Int) -> Float = ui.items[i].w
 
 @export(wasm, "get_item_h")
-fn get_item_h(i: Int) -> Float = app.cached_items[i].h
+fn get_item_h(i: Int) -> Float = ui.items[i].h
 
 @export(wasm, "get_item_kind")
-fn get_item_kind(i: Int) -> Int = app.cached_items[i].kind
+fn get_item_kind(i: Int) -> Int = ui.items[i].kind
 
 @export(wasm, "get_item_text")
-fn get_item_text(i: Int) -> Int = s(app.cached_items[i].content)
+fn get_item_text(i: Int) -> Int = s(ui.items[i].content)
 
 @export(wasm, "get_item_font_size")
-fn get_item_font_size(i: Int) -> Float = app.cached_items[i].font_size
+fn get_item_font_size(i: Int) -> Float = ui.items[i].font_size
 
 @export(wasm, "get_item_selectable")
-fn get_item_selectable(i: Int) -> Int = app.cached_items[i].selectable
+fn get_item_selectable(i: Int) -> Int = ui.items[i].selectable
 
 @export(wasm, "get_item_scrollable")
-fn get_item_scrollable(i: Int) -> Int = app.cached_items[i].scrollable
+fn get_item_scrollable(i: Int) -> Int = ui.items[i].scrollable
 
 @export(wasm, "get_list_frame_y")
-fn get_list_frame_y() -> Float = app.list_frame_y()
+fn get_list_frame_y() -> Float = ui.list_frame_y()
 
 @export(wasm, "get_list_frame_h")
-fn get_list_frame_h() -> Float = app.list_frame_height()
+fn get_list_frame_h() -> Float = ui.list_frame_height()
 
 // ══════════════════════════════════════════════════════════════
 // Click handling
 // ══════════════════════════════════════════════════════════════
 
 @export(wasm, "handle_click")
-fn handle_click(click_x: Float, click_y: Float) -> Int = app.handle_click(click_x, click_y)
+fn handle_click(click_x: Float, click_y: Float) -> Int = ui.handle_click(click_x, click_y)
 
 // ══════════════════════════════════════════════════════════════
 // Hit test (for scroll regions)
 // ══════════════════════════════════════════════════════════════
 
 @export(wasm, "hit_test")
-fn do_hit_test(x: Float, y: Float) -> Int = app.hit_test(x, y)
+fn do_hit_test(x: Float, y: Float) -> Int = ui.hit_test(x, y)

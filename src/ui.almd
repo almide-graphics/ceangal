@@ -1,0 +1,235 @@
+// ceangal ui — the app's state and what the user does to it, for any host
+//
+// What the screen shows (`items`, laid out for the viewport), the root
+// scroll region, the text field's content and composition, and the state
+// changes a click, a key or the wheel makes. Nothing here draws: a host —
+// the GPU one (app.almd, with the browser and native windows), the CPU one
+// (cpu_paint.almd, on a Wayland surface) — calls in, then draws `items` at
+// `scroll_y()` its own way.
+//
+// A state change calls `rebuild`; the host redraws after it.
+
+import self.scroll as sc
+import self.todoapp as td
+import self.render as render
+import self.view as v
+
+// ══════════════════════════════════════════════════════════════
+// State
+// ══════════════════════════════════════════════════════════════
+
+/// The viewport, CSS pixels.
+var viewport_w = 0.0
+var viewport_h = 0.0
+var root_region = 0
+/// What the screen shows, laid out for the viewport (list rows at scroll 0:
+/// a host adds `scroll_y()` to the scrollable ones).
+var items: List[render.RenderItem] = []
+
+/// The text field's content as UTF-8.
+var input_buf: List[Int] = []
+/// What an input method is composing into the field (code points), and the
+/// part of it the method marks, `compose_from ..< compose_to` (-1: no caret).
+var compose: List[Int] = []
+var compose_from = -1
+var compose_to = -1
+/// The field's caret where the host last drew it, CSS pixels — where an
+/// input method opens its candidate window.
+var caret_x = 0.0
+var caret_y = 0.0
+var caret_h = 0.0
+
+// ══════════════════════════════════════════════════════════════
+// Viewport and layout
+// ══════════════════════════════════════════════════════════════
+
+/// Start over for a `w` x `h` viewport: the scroll regions anew, laid out.
+fn reset(w: Float, h: Float) -> Unit = {
+  viewport_w = w
+  viewport_h = h
+  sc.reset_all()
+  root_region = sc.create_region(w, h, w, h, 0 - 1)
+  rebuild()
+}
+
+/// A new viewport size, keeping where the list is scrolled.
+fn set_viewport(w: Float, h: Float) -> Unit = {
+  viewport_w = w
+  viewport_h = h
+}
+
+/// Lay the app out again for the viewport, and give the list's scroll region
+/// its frame and content height.
+fn rebuild() -> Unit = {
+  let view = td.app()
+  items = render.render_at(view, viewport_w, viewport_h, 0.0)
+  let content_h = render.list_content_height(view)
+  if render.list_frame_height > 0.0 then {
+    sc.set_viewport_height(root_region, render.list_frame_height)
+    if content_h > 0.0 then { sc.set_content_height(root_region, content_h) } else ()
+  } else ()
+}
+
+/// The list's frame, CSS pixels: where scrolled rows are visible.
+fn list_frame_y() -> Float = render.list_frame_y
+
+fn list_frame_height() -> Float = render.list_frame_height
+
+// ══════════════════════════════════════════════════════════════
+// Scroll
+// ══════════════════════════════════════════════════════════════
+
+/// How far the list is scrolled: what a list row's y gains on screen (≤ 0).
+fn scroll_y() -> Float = sc.ax_pos[sc.ax(root_region, sc.AXIS_Y)]
+
+/// The scrollbar's opacity (it fades out once the list stops).
+fn scrollbar_opacity() -> Float = sc.ax_bar_opacity[sc.ax(root_region, sc.AXIS_Y)]
+
+/// Advance scroll physics by `dt` seconds; 1 while still moving.
+fn scroll_step(dt: Float) -> Int = sc.tick_all(dt)
+
+fn scroll_wheel(region: Int, dx: Float, dy: Float) -> Unit = sc.route_wheel(region, dx, dy)
+
+fn get_scroll_pos(region: Int, axis: Int) -> Float = sc.get_pos(region, axis)
+
+/// Scroll to fraction `frac` of the list (a dragged scrollbar).
+fn set_scroll_frac(frac: Float) -> Unit = {
+  let ry = sc.ax(root_region, sc.AXIS_Y)
+  sc.set_scrollbar_frac(ry, frac, sc.rgn_content_h[root_region], sc.rgn_bounds_h[root_region])
+}
+
+/// The list's content height * 10000 + its frame height (packed for a host
+/// reading one number).
+fn get_scroll_info() -> Float = sc.rgn_content_h[root_region] * 10000.0 + sc.rgn_bounds_h[root_region]
+
+/// The list's scrollbar thumb, CSS pixels: its top and bottom, or (0, 0)
+/// when the content fits.
+fn scrollbar_thumb() -> (Float, Float) = {
+  let frame_h = render.list_frame_height
+  let content_h = sc.rgn_content_h[root_region]
+  if content_h <= frame_h or frame_h <= 0.0 then (0.0, 0.0)
+  else {
+    let len = float.max(24.0, frame_h * frame_h / content_h)
+    let travel = frame_h - len
+    let frac = float.clamp((0.0 - scroll_y()) / (content_h - frame_h), 0.0, 1.0)
+    let top = render.list_frame_y + travel * frac
+    (top, top + len)
+  }
+}
+
+fn hit_test(x: Float, y: Float) -> Int = sc.full_hit_test(x, y)
+
+// ══════════════════════════════════════════════════════════════
+// The text field
+// ══════════════════════════════════════════════════════════════
+
+/// The code points of `s`.
+fn code_points(s: String) -> List[Int] = string.chars(s) |> list.map((c) => string.codepoint(c) ?? 0)
+
+/// What was typed into the field, as code points.
+fn typed() -> List[Int] = code_points(string.from_bytes(input_buf))
+
+fn input_clear() -> Unit = { input_buf = [] }
+
+fn input_push(byte: Int) -> Unit = { input_buf = input_buf + [byte] }
+
+/// Add the field's text (trimmed) as a todo and empty the field.
+fn input_submit() -> Unit = {
+  let entered = string.trim(string.from_bytes(input_buf))
+  input_buf = []
+  if string.len(entered) > 0 then {
+    td.add_todo(entered)
+    rebuild()
+  } else ()
+}
+
+/// Type code point `code` into the field.
+fn type_char(code: Int) -> Unit = {
+  input_buf = input_buf + string.to_bytes(string.from_codepoint(code))
+}
+
+/// Show `composing` — what an input method has composed so far, empty when it
+/// is done — at the field's caret, `from ..< to` marked. What it commits comes
+/// through `type_char`.
+fn set_composition(composing: String, from: Int, to: Int) -> Unit = {
+  compose = code_points(composing)
+  compose_from = from
+  compose_to = to
+}
+
+/// Where the host drew the field's caret, CSS pixels.
+fn set_caret(x: Float, y: Float, h: Float) -> Unit = {
+  caret_x = x
+  caret_y = y
+  caret_h = h
+}
+
+/// Delete the field's last character: its trailing continuation bytes
+/// (10xxxxxx) and the byte that leads them.
+fn backspace() -> Unit = {
+  var n = list.len(input_buf)
+  while n > 0 and input_buf[n - 1] >= 0x80 and input_buf[n - 1] < 0xC0 {
+    n = n - 1
+  }
+  input_buf = list.take(input_buf, int.max(0, n - 1))
+}
+
+// ══════════════════════════════════════════════════════════════
+// The todos
+// ══════════════════════════════════════════════════════════════
+
+fn todo_init_data() -> Unit = {
+  for i in 0..<20 {
+    td.add_todo("Item " + int.to_string(i))
+  }
+  rebuild()
+}
+
+fn todo_add() -> Unit = {
+  let idx = td.next_id.get()
+  td.add_todo("Item " + int.to_string(idx))
+  rebuild()
+}
+
+fn todo_toggle(id: Int) -> Unit = {
+  td.toggle_todo(id)
+  rebuild()
+}
+
+/// What a click at (`click_x`, `click_y`) hits: -2 the add button, a todo id,
+/// or -1 nothing.
+fn handle_click(click_x: Float, click_y: Float) -> Int = {
+  let list_y = render.list_frame_y
+  let list_h = render.list_frame_height
+  if click_y > list_y + list_h then 0 - 2
+  else if click_y >= list_y then {
+    let ih = 56.0
+    let todos_list = td.todos.get()
+    let total = list.len(todos_list)
+    let content_y = click_y - scroll_y() - list_y
+    let idx = float.to_int(float.floor(content_y / ih))
+    if idx >= 0 and idx < total then todos_list[idx].id
+    else 0 - 1
+  }
+  else 0 - 1
+}
+
+/// A click, acted on: add a todo or toggle one. `true` when the app changed.
+fn click(x: Float, y: Float) -> Bool = {
+  let hit = handle_click(x, y)
+  if hit == 0 - 2 then {
+    todo_add()
+    true
+  } else if hit >= 0 then {
+    todo_toggle(hit)
+    true
+  } else false
+}
+
+/// Whether `item` is a list row, drawn at its y plus the scroll offset and
+/// cut to the list's frame.
+fn scrolls(item: render.RenderItem) -> Bool = item.scrollable == 1
+
+/// Whether `item` carries text a host draws: a label, or the field.
+fn has_text(item: render.RenderItem) -> Bool =
+  (item.kind == v.TEXT and string.len(item.content) > 0) or item.kind == v.TEXT_FIELD
