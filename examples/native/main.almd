@@ -1,0 +1,140 @@
+// ceangal's todo demo in a native window — the host half of what
+// host/runtime.js does in the browser, over the same runtime (src/app.almd).
+//
+// Run from the package root:
+//   almide run examples/native/main.almd              interactive
+//   almide run examples/native/main.almd -- out.png   draw one frame, save it, exit
+//
+// Interactive: click a row to toggle it, click below the list to add one,
+// scroll with the wheel or drag the right edge, type into the field and press
+// Enter to add what you typed — Japanese through the system's input method,
+// its composition shown underlined in the field. Esc saves the current frame
+// to SNAPSHOT.
+
+import env
+import process
+import self.app as app
+import snaidhm.web.gpu as gpu
+import snaidhm.native.window as window
+import snaidhm.native.frame as frame
+import snaidhm.native.fonts as fonts
+import snaidhm.text as text
+
+// The scrollbar's grab zone at the right edge, CSS pixels (as the browser host).
+let SCROLLBAR_ZONE = 20.0
+
+// Where Esc saves the current frame.
+let SNAPSHOT = "ceangal-native.png"
+
+// Seconds per frame of scroll physics: presentation is vsync-paced.
+let FRAME_DT = 0.016666
+
+/// The scene for the window's current size: the drawable rounded down to
+/// multiples of 16, as the browser host sizes its canvas.
+fn prepare(device: Int) -> Unit = {
+  let s = window.scale_factor()
+  let pw = window.width() / 16 * 16
+  let ph = window.height() / 16 * 16
+  let css_w = float.to_int(int.to_float(pw) / s)
+  let css_h = float.to_int(int.to_float(ph) / s)
+  // No image layer or wallpaper natively: empty buffers, and the null
+  // texture handles resolve to snaidhm's transparent fallback.
+  let img_vtx = gpu.create_buffer(device, 32, int.bor(gpu.VERTEX, gpu.COPY_DST))
+  let img_idx = gpu.create_buffer(device, 16, int.bor(gpu.INDEX, gpu.COPY_DST))
+  app.prepare(device, css_w, css_h, pw, ph, img_vtx, img_idx, 0, 0, 0, 0, 0)
+}
+
+type Input = { dragging: Bool, animating: Bool, changed: Bool, snapshot: Bool }
+
+/// Apply every queued input to the app.
+fn handle_input(start: Input) -> Input = {
+  var st = start
+  var kind = window.next_event()
+  while kind != window.NONE {
+    let x = window.event_x()
+    let y = window.event_y()
+    if kind == window.MOUSE_MOVE then {
+      app.set_mouse(x, y)
+      if st.dragging then {
+        app.set_scroll_frac(float.clamp(y / app.viewport_h, 0.0, 1.0))
+        st = { ...st, animating: true }
+      } else ()
+    } else if kind == window.MOUSE_DOWN and window.event_code() == 0 then {
+      if x > app.viewport_w - SCROLLBAR_ZONE then { st = { ...st, dragging: true } } else ()
+    } else if kind == window.MOUSE_UP and window.event_code() == 0 then {
+      if st.dragging then { st = { ...st, dragging: false } }
+      else {
+        app.click(x, y)
+        st = { ...st, changed: true }
+      }
+    } else if kind == window.WHEEL then {
+      // The scroll physics take the DOM's deltaY negated, as the browser host
+      // hands them.
+      app.scroll_wheel(0, 0.0 - window.event_dx(), 0.0 - window.event_dy())
+      st = { ...st, animating: true }
+    } else if kind == window.TEXT then {
+      app.type_char(window.event_code())
+      st = { ...st, changed: true }
+    } else if kind == window.COMPOSE then {
+      app.set_composition(window.event_text(), window.event_code(), window.event_end())
+      st = { ...st, changed: true }
+    } else if kind == window.KEY then {
+      let code = window.event_code()
+      if code == window.KEY_ENTER then app.input_submit()
+      else if code == window.KEY_BACKSPACE then app.backspace()
+      else ()
+      st = { ...st, changed: true, snapshot: st.snapshot or code == window.KEY_ESCAPE }
+    } else ()
+    kind = window.next_event()
+  }
+  st
+}
+
+effect fn main() -> Unit = {
+  let capture = list.get(env.args(), 0)
+  if window.open("ceangal", 420, 720) then {
+    // A Latin face, then a Japanese one for what it lacks.
+    let faces = fonts.system()!
+    if list.len(faces) == 0 then {
+      println("no font found")
+      process.exit(1)
+    } else ()
+    // The field takes Japanese (and any other) input through the platform's
+    // input method; its candidate window follows the caret.
+    window.set_ime(true)
+    let device = 1
+    prepare(device)
+    app.todo_init_data()
+    var layer = app.text_layer(device, text.new_layer(device, faces))
+    match capture {
+      some(path) => {
+        app.draw_with_text(layer)
+        println(if frame.save_png(path) then "saved ${path}" else "capture failed")
+      },
+      none => {
+        var st: Input = { dragging: false, animating: false, changed: false, snapshot: false }
+        app.draw_with_text(layer)
+        // Sleep until input while nothing moves; pump every frame while the
+        // scroll physics run.
+        while (if st.animating then window.pump() else window.wait()) {
+          st = handle_input({ ...st, changed: false, snapshot: false })
+          if window.resized() then {
+            prepare(device)
+            app.flush()
+          } else ()
+          if st.animating then {
+            st = { ...st, animating: app.scroll_step(FRAME_DT) == 1 }
+          } else ()
+          layer = app.text_layer(device, layer)
+          window.set_ime_area(app.caret_x, app.caret_y, 1.0, app.caret_h)
+          app.draw_with_text(layer)
+          if st.snapshot then {
+            println(if frame.save_png(SNAPSHOT) then "saved ${SNAPSHOT}" else "snapshot failed")
+          } else ()
+        }
+      },
+    }
+  } else {
+    println("no window")
+  }
+}

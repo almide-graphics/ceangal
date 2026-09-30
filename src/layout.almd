@@ -7,8 +7,6 @@
 //   flex-shrink defaults to 0 (not 1) — no surprise shrinking
 //   min-width/height defaults to 0 (not auto) — no overflow surprises
 
-import math
-
 // ── Enums ──
 
 let ROW = 0
@@ -483,7 +481,7 @@ fn compute_size(node: Node, avail_w: Float, avail_h: Float) -> Size = {
       // Compute container size from lines
       var max_line_main = 0.0
       var total_cross = 0.0
-      for li in 0..n_lines {
+      for li in 0..<n_lines {
         let ln = resolved_lines[li]
         var line_main = 0.0
         let n_items = list.len(ln.items)
@@ -519,7 +517,7 @@ fn build_lines(node: Node, inner_main: Float) -> List[FlexLine] = {
   var cur_cross = 0.0
   var items_in_line = 0
 
-  for i in 0..n_ch {
+  for i in 0..<n_ch {
     let child = node.children[i]
     if child.display == DISPLAY_NONE or child.position == POSITION_ABSOLUTE then () else {
       // Basis: explicit basis or child's CONTENT size (not available-filling)
@@ -596,7 +594,7 @@ fn resolve_line_flex(node: Node, line: FlexLine, inner_main: Float) -> FlexLine 
   let gap_total = node.gap_main * int.to_float(int.max(0, n_items - 1))
   let rem1 = inner_main - basis_total - margin_total - gap_total
 
-  for ii in 0..n_items {
+  for ii in 0..<n_items {
     let item = line.items[ii]
     let child = node.children[item.idx]
     let b = item.basis
@@ -620,7 +618,7 @@ fn resolve_line_flex(node: Node, line: FlexLine, inner_main: Float) -> FlexLine 
   var tg2 = 0.0
   var tss2 = 0.0
   var ub2 = 0.0
-  for ii in 0..n_items {
+  for ii in 0..<n_items {
     if not frozen[ii] then {
       let child = node.children[line.items[ii].idx]
       let b = line.items[ii].basis
@@ -631,7 +629,7 @@ fn resolve_line_flex(node: Node, line: FlexLine, inner_main: Float) -> FlexLine 
   }
   let rem2 = inner_main - frozen_space - ub2 - margin_total - gap_total
   var mains2: List[Float] = []
-  for ii in 0..n_items {
+  for ii in 0..<n_items {
     if frozen[ii] then {
       mains2 = mains2 + [mains[ii]]
     } else {
@@ -651,7 +649,7 @@ fn resolve_line_flex(node: Node, line: FlexLine, inner_main: Float) -> FlexLine 
   // Build result
   var new_items: List[FlexItem] = []
   var new_cross = 0.0
-  for ii in 0..n_items {
+  for ii in 0..<n_items {
     let item = line.items[ii]
     let child = node.children[item.idx]
     let m = mains[ii]
@@ -701,7 +699,7 @@ fn layout_line(node: Node, line: FlexLine, inner_main: Float, inner_cross: Float
 
   // Auto margins: count and distribute free space
   var n_auto_margins = 0
-  for ii in 0..n_items {
+  for ii in 0..<n_items {
     let child = node.children[line.items[ii].idx]
     let mms = mar_main_start(child, dir)
     let mme = mar_main_end(child, dir)
@@ -714,7 +712,7 @@ fn layout_line(node: Node, line: FlexLine, inner_main: Float, inner_cross: Float
 
   var cursor = off
   var rects: List[LayoutRect] = []
-  for ii in 0..n_items {
+  for ii in 0..<n_items {
     let item = line.items[ii]
     let child = node.children[item.idx]
     let raw_ms = mar_main_start(child, dir)
@@ -833,14 +831,14 @@ fn do_layout(node: Node, x: Float, y: Float, w: Float, h: Float,
         // Compute line cross positions (normal order first)
         var line_positions: List[Float] = []
         var cursor_cross = line_offset
-        for li in 0..n_lines {
+        for li in 0..<n_lines {
           line_positions = line_positions + [cursor_cross]
           let lc = lines[li].cross_size + line_stretch
           cursor_cross = cursor_cross + lc + line_spacing
         }
 
         // For wrap-reverse: mirror positions
-        for li in 0..n_lines {
+        for li in 0..<n_lines {
           let idx = if node.wrap == WRAP_REVERSE then n_lines - 1 - li else li
           let ln = lines[idx]
           let lc = ln.cross_size + line_stretch
@@ -853,7 +851,7 @@ fn do_layout(node: Node, x: Float, y: Float, w: Float, h: Float,
 
       // Layout absolute children (positioned relative to parent content box)
       var abs_rects: List[LayoutRect] = []
-      for i in 0..n_ch {
+      for i in 0..<n_ch {
         let child = node.children[i]
         if child.position == POSITION_ABSOLUTE then {
           // Resolve percentage sizes → these ARE the allocated dimensions

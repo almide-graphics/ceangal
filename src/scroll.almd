@@ -103,13 +103,13 @@ fn set_viewport_height(id: Int, h: Float) -> Unit = {
 
 fn reset_all() -> Unit = {
   region_count = 0
-  for i in 0..MAX_REGIONS {
+  for i in 0..<MAX_REGIONS {
     rgn_bounds_x[i] = 0.0; rgn_bounds_y[i] = 0.0
     rgn_bounds_w[i] = 0.0; rgn_bounds_h[i] = 0.0
     rgn_content_w[i] = 0.0; rgn_content_h[i] = 0.0
     rgn_parent[i] = 0 - 1
   }
-  for i in 0..MAX_AXES {
+  for i in 0..<MAX_AXES {
     ax_pos[i] = 0.0; ax_vel[i] = 0.0; ax_min[i] = 0.0
     ax_state[i] = 0
     ax_bar_opacity[i] = 0.0; ax_bar_idle[i] = 0.0; ax_bar_hover[i] = 0.0
@@ -121,7 +121,7 @@ fn reset_all() -> Unit = {
 fn hit_test(x: Float, y: Float) -> Int = {
   // Walk regions in reverse (last created = innermost)
   var result = 0  // default to root (region 0)
-  for i in 0..region_count {
+  for i in 0..<region_count {
     let id = region_count - 1 - i
     if id == 0 then () else {
       // Transform point to parent's scrolled content space
@@ -250,7 +250,7 @@ fn route_release(region: Int, vel: Float) -> Unit = {
 fn tick_all(dt_raw: Float) -> Int = {
   let dt = float.min(dt_raw, 1.0 / 30.0)
   var any_active = false
-  for id in 0..region_count {
+  for id in 0..<region_count {
     let iy = ax(id, AXIS_Y)
     let ix = ax(id, AXIS_X)
     tick_axis(iy, dt)
@@ -337,7 +337,7 @@ fn full_hit_test(screen_x: Float, screen_y: Float) -> Int = {
   var best_type = HIT_NONE
   var best_region = 0
 
-  for idx in 0..region_count {
+  for idx in 0..<region_count {
     let id = region_count - 1 - idx
     let rx = region_screen_pos_x(id)
     let ry = region_screen_pos_y(id)

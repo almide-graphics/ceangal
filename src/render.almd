@@ -49,8 +49,10 @@ fn view_to_node(view: v.View, viewport_h: Float, scroll_y: Float) -> lay.Node = 
              else if view._kind == v.COL then lay.col(children_to_nodes(view._children, viewport_h, scroll_y))
              else if view._kind == v.BOX then lay.col(children_to_nodes(view._children, viewport_h, scroll_y))
              else if view._kind == v.LIST then {
-               // Virtual list: leaf node — takes grow space, positions items internally
-               lay.leaf(0.0, 0.0)
+               // Virtual list: leaf node — takes grow space, positions items internally.
+               // Width UNDEFINED so the column stretches it across; a 0 here is
+               // a fixed zero width, which drew every row 0px wide.
+               lay.leaf(lay.UNDEFINED, 0.0)
              }
              else if view._kind == v.TEXT_FIELD then {
                // Text field: leaf with text height
@@ -137,7 +139,7 @@ fn zip_view_rects(view: v.View, rects: List[lay.LayoutRect], idx: Int) -> ZipRes
       let ih = view._item_height
       let total = list.len(view._children)
       let pad = 8.0
-      for i in 0..total {
+      for i in 0..<total {
         let child = view._children[i]
         let cs = child._style
         let iy = list_y + int.to_float(i) * ih
