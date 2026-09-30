@@ -1,0 +1,17 @@
+# Files a consumer copies into the directory it serves.
+#
+# The toolchain ships `native/` for the native target but has no equivalent for
+# web host assets, so these are copied rather than resolved. The manifest is
+# what makes that copy mechanical and checkable instead of a fork — which is
+# how a downstream copy of this runtime once diverged silently.
+#
+# `gpu.js` is NOT here: it belongs to snaidhm, which declares the namespace it
+# implements. Copy snaidhm/host/MANIFEST's files too — runtime.js imports
+# ./gpu.js and expects it alongside.
+runtime.js
+sdf.js
+ttf.js
+raster.wgsl
+text.wgsl
+image.wgsl
+font.ttf

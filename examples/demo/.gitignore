@@ -1,0 +1,11 @@
+# Assembled by tools/assemble-host.mjs from the packages that own these files.
+# Editing them here is the fork this whole arrangement exists to prevent.
+runtime.js
+gpu.js
+sdf.js
+ttf.js
+raster.wgsl
+text.wgsl
+image.wgsl
+font.ttf
+.provenance

@@ -41,3 +41,60 @@ Active development. Flexbox layout engine complete (74 Yoga-aligned tests passin
 ## License
 
 MIT
+
+## Host
+
+ceangal's browser host lives in `host/`, not inside an example — a consumer that
+had to copy it out of `examples/demo/` is how a downstream copy once diverged
+from this repo and a rendering bug got fixed in the copy instead of the source.
+
+`host/` owns the UI half: the frame loop, the DOM overlay, fonts, and ceangal's
+own shaders. It does **not** implement the `gpu` namespace — that belongs to
+[snaidhm](https://github.com/almide-graphics/snaidhm), which declares it, and
+arrives as `gpu.js` from `snaidhm/host/`.
+
+The toolchain resolves `.almd` modules from dependencies but has no equivalent
+for web host assets, so a page still copies these files. `tools/assemble-host.mjs`
+makes that copy mechanical and checkable:
+
+```sh
+# assemble into the directory you serve
+node tools/assemble-host.mjs examples/demo host ../snaidhm/host
+
+# CI: fail if a served file has drifted from the package that owns it
+node tools/assemble-host.mjs --check examples/demo host ../snaidhm/host
+```
+
+### Extending without forking
+
+`init` takes hooks so an app adds its own rendering without copying this file —
+which is exactly what a consumer had to do, and how its copy drifted:
+
+```js
+await init("app.wasm", canvas, overlay, textarea, {
+  async onReady(ctx) {
+    const shader = ctx.registerShader(myWgsl);
+    ctx.exports.my_init(ctx.device, canvas.width, canvas.height);
+  },
+  onFrame(ctx, t) {
+    ctx.exports.my_frame(ctx.device, t);  // app pass first — it clears
+    ctx.drawUI();                          // ceangal composites on top
+  },
+  onResize(ctx, w, h) { ctx.exports.my_resize(ctx.device, w, h); },
+  onError(e) { /* a hook threw; ceangal reports rather than swallowing */ },
+
+  // "wallpaper" (default) paints ceangal's backdrop; "transparent" leaves it
+  // clear, which an app rendering its own layer underneath the UI wants — the
+  // 2D shader takes its coverage from that texture's alpha where no item sits,
+  // so an opaque backdrop makes the UI opaque and erases what is below.
+  background: "transparent",
+});
+```
+
+An app that supplies `onFrame` owns the frame: ceangal draws when asked, so the
+app decides the order its pass and the UI compose in.
+
+Each package lists what it contributes in `host/MANIFEST`. The assembler writes
+`.provenance` next to the output recording the source commit and hash of every
+file, and `--check` fails on drift in either direction — including a served file
+that no package claims.
