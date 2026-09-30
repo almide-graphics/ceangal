@@ -4,7 +4,7 @@ import self.view as v
 
 fn build_list(n: Int) -> v.View = {
   var items: List[v.View] = []
-  for i in 0..n {
+  for i in 0..<n {
     let phase = i - (i / 6) * 6
     let c = if phase == 0 then v.rgba(0.9, 0.25, 0.25, 1.0)
             else if phase == 1 then v.rgba(0.2, 0.75, 0.3, 1.0)
@@ -19,7 +19,7 @@ fn build_list(n: Int) -> v.View = {
 
 fn build_one_changed(n: Int, idx: Int) -> v.View = {
   var items: List[v.View] = []
-  for i in 0..n {
+  for i in 0..<n {
     let phase = i - (i / 6) * 6
     let c = if i == idx then v.rgba(1.0, 0.0, 0.0, 1.0)
             else if phase == 0 then v.rgba(0.9, 0.25, 0.25, 1.0)
