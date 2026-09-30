@@ -6,7 +6,9 @@
 //   almide run examples/wayland/main.almd -- 8000    (quit after 8 s)
 //
 // Click the button to add a todo, a row to toggle it; type into the field and
-// press Enter to add what was typed; the wheel or the scrollbar scrolls.
+// press Enter to add what was typed; the wheel or the scrollbar scrolls. An
+// input method (fcitx5, ibus — over text-input-v3) composes Japanese in the
+// field, its candidate window beside the caret.
 
 import env
 import self.cpu_paint as paint
@@ -34,6 +36,7 @@ effect fn main() -> Unit = {
     // Labels laid out at the width they will be drawn at.
     ui.set_measure((t, size) => canvas.measure(faces, ui.code_points(t), size))
     ui.todo_init_data()
+    window.set_ime(true)!
     window.present(paint.paint(frame(), faces).px)!
     var animating = false
     var dragging = false
@@ -70,6 +73,9 @@ effect fn main() -> Unit = {
         } else if kind == window.TEXT then {
           ui.type_char(window.event_code())
           dirty = true
+        } else if kind == window.COMPOSE then {
+          ui.set_composition(window.event_text(), window.event_code(), window.event_end())
+          dirty = true
         } else if kind == window.KEY then {
           let k = window.event_code()
           if k == window.KEY_ENTER then {
@@ -86,7 +92,11 @@ effect fn main() -> Unit = {
         animating = ui.scroll_step(FRAME_DT) == 1
         dirty = true
       } else ()
-      if dirty and going then { window.present(paint.paint(frame(), faces).px)! } else ()
+      if dirty and going then {
+        window.present(paint.paint(frame(), faces).px)!
+        // Painting placed the caret: the candidate window opens beside it.
+        window.set_ime_area(ui.caret_x, ui.caret_y, 1.0, ui.caret_h)!
+      } else ()
     }
     // One last frame for whoever captures the screen.
     window.present(paint.paint(frame(), faces).px)!
