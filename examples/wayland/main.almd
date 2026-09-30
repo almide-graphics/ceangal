@@ -31,6 +31,8 @@ effect fn main() -> Unit = {
     let faces = fonts.system()!
     let start = env.millis()
     ui.reset(window.extent().0, window.extent().1)
+    // Labels laid out at the width they will be drawn at.
+    ui.set_measure((t, size) => canvas.measure(faces, ui.code_points(t), size))
     ui.todo_init_data()
     window.present(paint.paint(frame(), faces).px)!
     var animating = false

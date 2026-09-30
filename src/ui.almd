@@ -70,6 +70,13 @@ fn rebuild() -> Unit = {
   } else ()
 }
 
+/// Measure labels with `f` (text, size) -> width in CSS pixels — the fonts
+/// the host draws with — and lay out again.
+fn set_measure(f: (String, Float) -> Float) -> Unit = {
+  render.set_measure(f)
+  rebuild()
+}
+
 /// The list's frame, CSS pixels: where scrolled rows are visible.
 fn list_frame_y() -> Float = render.list_frame_y
 

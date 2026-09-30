@@ -107,6 +107,9 @@ effect fn main() -> Unit = {
     prepare(device)
     app.todo_init_data()
     var layer = app.text_layer(device, text.new_layer(device, faces))
+    // Labels laid out at the width the glyph cache draws them.
+    let measuring = layer
+    ui.set_measure((t, size) => text.measure(measuring, ui.code_points(t), size))
     match capture {
       some(path) => {
         app.draw_with_text(layer)

@@ -57,3 +57,17 @@ test "todo app renders" {
   let add_btn = items[list.len(items) - 1]
   assert(add_btn.bg_b > 0.8)
 }
+
+test "labels are laid out at the width the host measures" {
+  let view = v.row([v.text("ab") |> v.font(10.0), v.text("cd") |> v.font(10.0)])
+  r.set_measure((t, size) => int.to_float(string.len(t)) * size * 5.0)
+  let measured = r.render(view, 400.0, 300.0)
+  r.set_measure(r.guess_width)
+  // The row, then its two labels: the second starts where the first ends.
+  assert(approx(measured[2].x - measured[1].x, 100.0))
+}
+
+test "the guess counts characters, a CJK one a full em" {
+  assert(approx(r.guess_width("ab", 10.0), 11.0))
+  assert(approx(r.guess_width("日本", 10.0), 20.0))
+}
