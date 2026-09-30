@@ -39,6 +39,19 @@ jobs:
           ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
           git config --global core.sshCommand "ssh -i ~/.ssh/snaidhm -o IdentitiesOnly=yes"
           git config --global url."git@github.com:almide-graphics/snaidhm".insteadOf "https://github.com/almide-graphics/snaidhm"
+      # `almide test` runs each file on wasm through the wasmtime CLI, and
+      # without it silently rebuilds every file natively — each one compiling
+      # the package's native deps (wgpu, winit) from scratch.
+      - name: Install wasmtime (the runtime of almide test's wasm leg)
+        run: |
+          set -euo pipefail
+          VERSION=v49.0.1
+          TARBALL="wasmtime-${VERSION}-x86_64-linux.tar.xz"
+          curl --fail --location --retry 5 --retry-all-errors \
+            "https://github.com/bytecodealliance/wasmtime/releases/download/${VERSION}/${TARBALL}" --output "$RUNNER_TEMP/$TARBALL"
+          tar -xf "$RUNNER_TEMP/$TARBALL" -C "$RUNNER_TEMP"
+          sudo install -m 755 "$RUNNER_TEMP/wasmtime-${VERSION}-x86_64-linux/wasmtime" /usr/local/bin/wasmtime
+          wasmtime --version
       - name: Test
         run: almide test src/
       - name: Check every host
