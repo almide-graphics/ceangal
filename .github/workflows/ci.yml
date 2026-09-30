@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # The compiler the code is checked against; advance it deliberately.
+  ALMIDE_VERSION: v0.66.0-rc1
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Almide ${{ env.ALMIDE_VERSION }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd "$RUNNER_TEMP"
+          gh release download "$ALMIDE_VERSION" -R almide/almide -p almide-linux-x86_64.tar.gz -p almide-checksums.sha256
+          grep ' almide-linux-x86_64.tar.gz$' almide-checksums.sha256 | sha256sum -c -
+          tar xzf almide-linux-x86_64.tar.gz
+          echo "$RUNNER_TEMP/almide-linux-x86_64" >> "$GITHUB_PATH"
+      - name: Read access to snaidhm (private)
+        env:
+          KEY: ${{ secrets.SNAIDHM_DEPLOY_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::secret SNAIDHM_DEPLOY_KEY is not set: snaidhm is private and this build depends on it (a read-only deploy key on almide-graphics/snaidhm)"
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/snaidhm && chmod 600 ~/.ssh/snaidhm
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+          git config --global core.sshCommand "ssh -i ~/.ssh/snaidhm -o IdentitiesOnly=yes"
+          git config --global url."git@github.com:almide-graphics/snaidhm".insteadOf "https://github.com/almide-graphics/snaidhm"
+      # `almide test` runs each file on wasm through the wasmtime CLI, and
+      # without it silently rebuilds every file natively — each one compiling
+      # the package's native deps (wgpu, winit) from scratch.
+      - name: Install wasmtime (the runtime of almide test's wasm leg)
+        run: |
+          set -euo pipefail
+          VERSION=v49.0.1
+          TARBALL="wasmtime-${VERSION}-x86_64-linux.tar.xz"
+          curl --fail --location --retry 5 --retry-all-errors \
+            "https://github.com/bytecodealliance/wasmtime/releases/download/${VERSION}/${TARBALL}" --output "$RUNNER_TEMP/$TARBALL"
+          tar -xf "$RUNNER_TEMP/$TARBALL" -C "$RUNNER_TEMP"
+          sudo install -m 755 "$RUNNER_TEMP/wasmtime-${VERSION}-x86_64-linux/wasmtime" /usr/local/bin/wasmtime
+          wasmtime --version
+      - name: Test
+        run: almide test src/
+      - name: Check every host
+        run: |
+          for f in examples/wayland/main.almd examples/native/main.almd src/mod.almd bench/diff_bench.almd; do
+            echo "== $f"; almide check "$f"
+          done
+      - name: Build the Wayland host (native, release)
+        run: almide build --release examples/wayland/main.almd -o "$RUNNER_TEMP/ceangal"
