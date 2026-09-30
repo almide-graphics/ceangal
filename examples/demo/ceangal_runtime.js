@@ -18,6 +18,14 @@ const B = (n) => BigInt(n);
 const N = (b) => Number(b);
 
 let _device, _context, _format, _wasmMemory;
+// When an app's own pass has already cleared the colour target this frame,
+// ceangal's pass must LOAD rather than clear or it erases that pass's output.
+// Set by `begin_render_pass_3d`; the app's render loop resets it per frame via
+// `window.ceangalBeginFrame()`.
+let _clearedThisFrame = false;
+// Depth target for the optional 3D pass, recreated whenever the drawing buffer
+// resizes. Null until `set_depth_size` is called.
+let _depth = null;
 let _font = null, _atlas = null;
 
 const strings = [];
@@ -80,7 +88,13 @@ function createGpuImports(canvas) {
       return B(h(g(deviceId).createRenderPipeline({
         layout: "auto",
         vertex: { module: g(shaderId), entryPoint: "vs_fullscreen" },
-        fragment: { module: g(shaderId), entryPoint: "fs_fullscreen", targets: [{ format: _format }] },
+        // Blend, so the pass composites over whatever is already in the target
+        // instead of overwriting it. Without this the coverage the fragment
+        // shader reports is discarded and the layer is always opaque.
+        fragment: { module: g(shaderId), entryPoint: "fs_fullscreen", targets: [{ format: _format, blend: {
+          color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha", operation: "add" },
+          alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" },
+        }}] },
         primitive: { topology: "triangle-list" },
       })));
     },
@@ -136,7 +150,8 @@ function createGpuImports(canvas) {
     begin_render_pass(encoderId, r, g_, b, a) {
       return B(h(g(encoderId).beginRenderPass({
         colorAttachments: [{ view: _context.getCurrentTexture().createView(),
-          clearValue: { r, g: g_, b, a }, loadOp: "clear", storeOp: "store" }],
+          clearValue: { r, g: g_, b, a },
+          loadOp: _clearedThisFrame ? "load" : "clear", storeOp: "store" }],
       })));
     },
     set_pipeline(passId, pipelineId) { g(passId).setPipeline(g(pipelineId)); },
@@ -159,6 +174,72 @@ function createGpuImports(canvas) {
       g(deviceId).queue.writeBuffer(g(bufferId), 0, new Uint8Array(buf));
       _dataChunks = []; _dataIsF32 = [];
     },
+    // ── Optional 3D pass ──
+    //
+    // ceangal's own pipeline is a fullscreen quad with no vertex buffers and no
+    // depth attachment, so a mesh cannot go through it. These are the entry
+    // points an app needs to render geometry UNDER the 2D layer, declared
+    // against the same `gpu` namespace snaidhm owns. Pure boundary translation:
+    // no application logic lives here.
+
+    set_depth_size(deviceId, w, h) {
+      const width = Math.max(1, N(w)), height = Math.max(1, N(h));
+      if (_depth && _depth.width === width && _depth.height === height) return;
+      if (_depth) _depth.tex.destroy();
+      const tex = g(deviceId).createTexture({
+        size: [width, height], format: "depth24plus",
+        usage: GPUTextureUsage.RENDER_ATTACHMENT,
+      });
+      _depth = { tex, view: tex.createView(), width, height };
+    },
+
+    // Fixed mesh vertex layout: pos(3) + normal(3) + uv(2), 32-byte stride,
+    // depth-tested with `less`, back faces culled, glTF's CCW front.
+    create_mesh_pipeline(deviceId, shaderId, _fmt) {
+      return B(h(g(deviceId).createRenderPipeline({
+        layout: "auto",
+        vertex: {
+          module: g(shaderId), entryPoint: "vs_main",
+          buffers: [{ arrayStride: 32, attributes: [
+            { shaderLocation: 0, offset: 0, format: "float32x3" },
+            { shaderLocation: 1, offset: 12, format: "float32x3" },
+            { shaderLocation: 2, offset: 24, format: "float32x2" },
+          ]}],
+        },
+        fragment: { module: g(shaderId), entryPoint: "fs_main", targets: [{ format: _format }] },
+        primitive: { topology: "triangle-list", cullMode: "back", frontFace: "ccw" },
+        depthStencil: { format: "depth24plus", depthWriteEnabled: true, depthCompare: "less" },
+      })));
+    },
+
+    // begin_render_pass with the depth attachment bound. `load` chooses whether
+    // the colour target is cleared (0) or preserved (1). Depth always clears.
+    begin_render_pass_3d(encoderId, r, g_, b, a, load) {
+      if (!_depth) throw new Error("begin_render_pass_3d before set_depth_size");
+      if (N(load) !== 1) _clearedThisFrame = true;
+      return B(h(g(encoderId).beginRenderPass({
+        colorAttachments: [{
+          view: _context.getCurrentTexture().createView(),
+          clearValue: { r, g: g_, b, a },
+          loadOp: N(load) === 1 ? "load" : "clear", storeOp: "store",
+        }],
+        depthStencilAttachment: {
+          view: _depth.view, depthClearValue: 1.0,
+          depthLoadOp: "clear", depthStoreOp: "store",
+        },
+      })));
+    },
+
+    // u16 indices — half the bandwidth of the u32 path, and glTF's common case.
+    set_index_buffer_u16(passId, bufferId) { g(passId).setIndexBuffer(g(bufferId), "uint16"); },
+
+    // Upload from linear memory at an offset, so geometry built in a Bytes
+    // arena reaches the GPU without an intermediate copy.
+    write_buffer_at(deviceId, bufferId, dstOffset, srcPtr, len) {
+      g(deviceId).queue.writeBuffer(g(bufferId), N(dstOffset),
+        new Uint8Array(_wasmMemory.buffer, N(srcPtr), N(len)));
+    },
+
     log_int(v) { console.log("[gpu]", N(v)); },
     log_str(ptr, len) { console.log("[gpu]", new TextDecoder().decode(new Uint8Array(_wasmMemory.buffer, N(ptr), N(len)))); },
   };
@@ -203,6 +284,20 @@ class ScrollAnimator {
 // ══════════════════════════════════════════════════════════════
 // Init
 // ══════════════════════════════════════════════════════════════
+
+/// Register an app-supplied WGSL module and return the index `create_shader`
+/// resolves it by. The built-in shaders occupy the low indices; an app that
+/// renders its own pass (a mesh, say) adds its module here instead of forking
+/// this file.
+export function registerShader(code) {
+  SHADERS.push(code);
+  return SHADERS.length - 1;
+}
+
+/// Call at the top of each frame when the app drives its own render loop: it
+/// resets the per-frame clear ownership so ceangal's pass clears again when the
+/// app's 3D pass did not run.
+export function beginFrame() { _clearedThisFrame = false; }
 
 export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   if (!navigator.gpu) throw new Error("WebGPU not supported");

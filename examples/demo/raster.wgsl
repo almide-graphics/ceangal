@@ -336,12 +336,20 @@ fn fs_fullscreen(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
   // Under a glass_card/glass_dark panel, use a blurred + slightly lightened
   // backdrop sample instead of the sharp wallpaper (frosted-glass look).
   var bg_rgb: vec3<f32>;
+  // The wallpaper's own alpha is this layer's coverage where no item sits.
+  // A transparent wallpaper lets whatever was rendered into the target BEFORE
+  // this pass show through — an app that draws its own 3D layer underneath,
+  // for instance.
+  let bg_a = textureSampleLevel(bg_texture, bg_sampler, uv, 0.0).w;
   if item_a > 0.02 {
     let texel = vec2<f32>(1.0 / w, 1.0 / h);
     bg_rgb = mix(blur_bg(uv, texel, 9), vec3<f32>(1.0), 0.05);
   } else {
     bg_rgb = textureSampleLevel(bg_texture, bg_sampler, uv, 0.0).xyz;
   }
+  // Coverage accumulator: every contribution that puts INK on the screen must
+  // raise it, or that ink is drawn at alpha 0 and never appears.
+  var cover = max(item_a, bg_a);
   var r = bg_rgb.x;
   var g = bg_rgb.y;
   var b = bg_rgb.z;
@@ -358,6 +366,7 @@ fn fs_fullscreen(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
   let edge = length(vec2<f32>(dpdx(item_a), dpdy(item_a)));
   let rim = smoothstep(0.0, 0.5, edge) * 0.35;
   r += rim; g += rim; b += rim;
+  cover = max(cover, rim);
 
   // ── Hover highlight (fragment, O(1)) ──
   let hover_ri = i32(render_params.hover_item_idx);
@@ -374,6 +383,7 @@ fn fs_fullscreen(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
       if d_h < 0.5 {
         let aa_h = 1.0 - smoothstep(-1.0, 0.5, d_h);
         r += aa_h * 0.06; g += aa_h * 0.06; b += aa_h * 0.06;
+        cover = max(cover, aa_h * 0.06);
       }
     }
   }
@@ -430,6 +440,7 @@ fn fs_fullscreen(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
     let d_x = scrollbar_sdf(vec2<f32>(px_x, px_y), center_x, half_x, bar_h * 0.5);
     let a_x = (1.0 - smoothstep(-1.0, 0.5, d_x)) * 0.6 * render_params.scrollbar_opacity_x;
     r = mix(r, 1.0, a_x);
+    cover = max(cover, a_x);
     g = mix(g, 1.0, a_x);
     b = mix(b, 1.0, a_x);
   }
@@ -466,11 +477,23 @@ fn fs_fullscreen(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
         let d_v = scrollbar_sdf(vec2<f32>(px_x, px_y), center_v, half_v, bar_w * 0.5);
         let a_v = (1.0 - smoothstep(-1.0, 0.5, d_v)) * 0.55 * rgn_bar_oy;
         r = mix(r, 1.0, a_v);
+        cover = max(cover, a_v);
         g = mix(g, 1.0, a_v);
         b = mix(b, 1.0, a_v);
       }
     }
   }
 
-  return vec4<f32>(r, g, b, 1.0);
+  // Report real coverage, NOT 1.0.
+  //
+  // A hardcoded opaque alpha makes this pass erase everything already in the
+  // colour target, whatever its own content. That is invisible while ceangal
+  // owns the whole frame, and fatal the moment an app composites it over
+  // something: a downstream 3D pass rendered correctly for 60 straight frames
+  // and was painted over every one of them, with no error anywhere to show it.
+  //
+  // Coverage is accumulated above by every contribution that puts ink on the
+  // screen. Anything added here later must raise `cover` too, or it will be
+  // drawn at alpha 0 and never appear.
+  return vec4<f32>(r, g, b, clamp(cover, 0.0, 1.0));
 }
