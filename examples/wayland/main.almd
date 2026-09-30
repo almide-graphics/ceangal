@@ -50,6 +50,13 @@ effect fn main() -> Unit = {
       while kind != window.NONE {
         let x = window.event_x()
         let y = window.event_y()
+        if kind == window.MOUSE_MOVE then {
+          window.set_cursor(match ui.hover(x, y) {
+            ui.Editable => window.Text,
+            ui.Clickable => window.Hand,
+            ui.Plain => window.Arrow,
+          })!
+        } else ()
         if kind == window.MOUSE_MOVE and dragging then {
           ui.set_scroll_frac((y - ui.list_frame_y()) / ui.list_frame_height())
           animating = true
