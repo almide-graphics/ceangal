@@ -1,0 +1,132 @@
+// ceangal cpu_draw — render items drawn on snaidhm's CPU canvas, for any app
+//
+// Every item as the GPU host draws it: a rounded rectangle in its colour,
+// faded by its opacity; list rows moved by the scroll offset and cut to the
+// list's frame; a label left in its box and centred on the line; a text
+// field's content, composition and caret inset 12px. The canvas draws in
+// units, and a unit here is a CSS pixel, so a canvas made for a window's
+// scale is sharp at any scale.
+
+import self.render as render
+import self.view as v
+import snaidhm.cpu.canvas as canvas
+import snaidhm.sfnt as sfnt
+
+/// A font's ascent and descent at `size`, in units (both positive).
+fn metrics(fonts: List[sfnt.Font], size: Float) -> (Float, Float) = {
+  let f = fonts[0]
+  let em = size / int.to_float(f.units_per_em)
+  (int.to_float(f.ascent) * em, 0.0 - int.to_float(f.descent) * em)
+}
+
+/// The item's text colour: the theme's where it sets one, white otherwise.
+fn text_colour(item: render.RenderItem) -> (Float, Float, Float, Float) =
+  if item.fg_a > 0.0 then (item.fg_r, item.fg_g, item.fg_b, item.fg_a) else (1.0, 1.0, 1.0, 1.0)
+
+/// A text field's state as its host keeps it: what was typed, and what an
+/// input method is composing with its marked part `from ..< to` (code-point
+/// indices, -1: no caret).
+type Field = { typed: List[Int], compose: List[Int], from: Int, to: Int }
+
+/// An empty field.
+fn no_field() -> Field = { typed: [], compose: [], from: 0 - 1, to: 0 - 1 }
+
+/// Where list rows are drawn: moved down by `offset` (≤ 0 once scrolled) and
+/// shown only between `top` and `bottom`.
+type Scroll = { offset: Float, top: Float, bottom: Float }
+
+/// Nothing scrolled.
+fn no_scroll() -> Scroll = { offset: 0.0, top: 0.0, bottom: 0.0 }
+
+/// A frame drawn, and where the text field's caret went (units): where an
+/// input method opens its candidate window.
+type Painted = { canvas: canvas.Canvas, caret_x: Float, caret_y: Float, caret_h: Float }
+
+/// `items` on `frame` (a canvas drawn on in CSS pixels), over what is there
+/// already: a text field shows `field`, list rows go where `scroll` says.
+fn draw(frame: canvas.Canvas, fonts: List[sfnt.Font], items: List[render.RenderItem], field: Field,
+        scroll: Scroll) -> Painted = {
+  var c = frame
+  var caret = (0.0, 0.0, 0.0)
+  for item in items {
+    let scrolls = item.scrollable == 1
+    let y = item.y + (if scrolls then scroll.offset else 0.0)
+    // List rows only inside the list's frame; everything else anywhere.
+    let top = if scrolls then float.max(y, scroll.top) else y
+    let bottom = if scrolls then float.min(y + item.h, scroll.bottom) else y + item.h
+    if bottom > top then {
+      c = canvas.clip(c, item.x, top, item.x + item.w, bottom)
+      let a = item.bg_a * item.opacity
+      if a > 0.0 then {
+        c = canvas.rect(c, item.x, y, item.x + item.w, y + item.h, item.rounded,
+          item.bg_r, item.bg_g, item.bg_b, a)
+      } else ()
+      if item.kind == v.TEXT and string.len(item.content) > 0 then {
+        let m = metrics(fonts, item.font_size)
+        let baseline = y + item.h / 2.0 + (m.0 - m.1) / 2.0
+        let col = text_colour(item)
+        c = canvas.draw_text(c, fonts, code_points(item.content), item.font_size, item.x, baseline,
+          col.0, col.1, col.2, col.3 * item.opacity)
+      } else if item.kind == v.TEXT_FIELD then {
+        let p = text_field(c, fonts, field, item, y)
+        c = p.canvas
+        caret = (p.caret_x, p.caret_y, p.caret_h)
+      } else ()
+    } else ()
+  }
+  { canvas: canvas.unclip(c), caret_x: caret.0, caret_y: caret.1, caret_h: caret.2 }
+}
+
+/// The code points of `s`.
+fn code_points(s: String) -> List[Int] = string.chars(s) |> list.map((c) => string.codepoint(c) ?? 0)
+
+/// Text field `item`, drawn at `y`: what was typed, then what an input
+/// method is composing, underlined (its marked part twice as thick), then the
+/// caret, in the item's text colour — or its placeholder, dimmed, when there
+/// is nothing.
+fn text_field(frame: canvas.Canvas, fonts: List[sfnt.Font], field: Field, item: render.RenderItem,
+              y: Float) -> Painted = {
+  let x = item.x
+  let w = item.w
+  let size = item.font_size
+  let ink = text_colour(item)
+  let pad = 12.0
+  let typed = field.typed
+  let compose = field.compose
+  let m = metrics(fonts, size)
+  let ascent = m.0
+  let descent = m.1
+  let baseline = y + pad + ascent
+  let left = x + pad
+  var c = frame
+  if list.len(typed) == 0 and list.len(compose) == 0 then {
+    c = canvas.draw_text(c, fonts, code_points(item.content), size, left, baseline, ink.0, ink.1, ink.2, 0.5 * ink.3)
+  } else {
+    c = canvas.draw_text(c, fonts, typed, size, left, baseline, ink.0, ink.1, ink.2, ink.3)
+  }
+  // The composition starts where the typed text ends.
+  let start = left + canvas.measure(fonts, typed, size)
+  let line = 1.0
+  let under = baseline + descent / 2.0
+  if list.len(compose) > 0 then {
+    c = canvas.draw_text(c, fonts, compose, size, start, baseline, ink.0, ink.1, ink.2, ink.3)
+    let end = start + canvas.measure(fonts, compose, size)
+    c = canvas.rect(c, start, under, float.min(end, x + w), under + line, 0.0, ink.0, ink.1, ink.2, 0.8 * ink.3)
+    if field.to > field.from and field.from >= 0 then {
+      let m0 = start + canvas.measure(fonts, list.take(compose, field.from), size)
+      let m1 = start + canvas.measure(fonts, list.take(compose, field.to), size)
+      c = canvas.rect(c, m0, under, float.min(m1, x + w), under + 2.0 * line, 0.0, ink.0, ink.1, ink.2, ink.3)
+    } else ()
+  } else ()
+  // The caret: at the end of the composition's marked part, else at the end
+  // of what was typed.
+  let composing = list.len(compose) > 0
+  let at = if composing and field.to >= 0 then start + canvas.measure(fonts, list.take(compose, field.to), size)
+           else start
+  let top = baseline - ascent
+  let bottom = baseline + descent
+  if composing and field.to < 0 then () else {
+    c = canvas.rect(c, at, top, at + line, bottom, 0.0, ink.0, ink.1, ink.2, 0.9 * ink.3)
+  }
+  { canvas: c, caret_x: at, caret_y: top, caret_h: bottom - top }
+}

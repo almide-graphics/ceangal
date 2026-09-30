@@ -1,18 +1,18 @@
-// ceangal app runtime — shared by the browser and native hosts
+// ceangal app — the GPU host's half: ui.almd's items on snaidhm's GPU scene
 //
 // Architecture:
-//   State change (rare): app() → layout → upload items → GPU
+//   State change (rare): ui (app() → layout → items) → upload items → GPU
 //   Scroll (60fps): write scroll_y → GPU compute+render (NO tree ops)
 //
 // The browser host (mod.almd's wasm exports + host/runtime.js) and the native
-// host (examples/native) drive the same functions here. What differs is only
-// the host's half: the browser draws item text as DOM spans and edits the
+// host (examples/native) drive the verbs here: each changes ui's state, then
+// uploads and draws. The browser draws item text as DOM spans and edits the
 // text field in a <textarea>; natively `text_layer` draws both through
-// snaidhm's glyph cache, and `type_char` / `backspace` edit the field.
+// snaidhm's glyph cache.
 
 import self.scroll as sc
-import self.todoapp as td
 import self.render as render
+import self.ui as ui
 import self.view as v
 import snaidhm
 import snaidhm.web.gpu as gpu
@@ -33,44 +33,18 @@ var cached_scene: snaidhm.SceneHandle = {
   img_pipeline: 0, img_bg: 0, img_vtx: 0, img_idx: 0, img_count: 0, format: 0,
 }
 var scene_ready = false
-var viewport_w = 0.0
-var viewport_h = 0.0
-var root_region = 0
-var cached_items: List[render.RenderItem] = []
-
-// The text field's content as UTF-8.
-var input_buf: List[Int] = []
-// What an input method is composing into the field (code points), and the
-// part of it the method marks, `compose_from ..< compose_to` (-1: no caret).
-// Native only: in the browser the <textarea> composes.
-var compose: List[Int] = []
-var compose_from = -1
-var compose_to = -1
-// The field's caret as `text_layer` last placed it, CSS pixels — where an
-// input method opens its candidate window.
-var caret_x = 0.0
-var caret_y = 0.0
-var caret_h = 0.0
-
 // ══════════════════════════════════════════════════════════════
 // Upload items (ONLY on state change — never during scroll)
 // ══════════════════════════════════════════════════════════════
 
-fn dpr() -> Float = int.to_float(cached_scene.height) / viewport_h
+fn dpr() -> Float = int.to_float(cached_scene.height) / ui.viewport_h
 
-fn rebuild_and_upload() -> Unit = {
-  let view = td.app()
-  let items = render.render_at(view, viewport_w, viewport_h, 0.0)
-  cached_items = items
+/// Upload what ui laid out last (`ui.rebuild`), and tell the GPU the list's
+/// frame and content height.
+fn upload_all() -> Unit = {
   upload_visible()
-
-  // Update scroll bounds
-  let content_h = render.list_content_height(view)
+  let content_h = sc.rgn_content_h[ui.root_region]
   if render.list_frame_height > 0.0 then {
-    sc.set_viewport_height(root_region, render.list_frame_height)
-    if content_h > 0.0 then {
-      sc.set_content_height(root_region, content_h)
-    } else ()
     let s = dpr()
     let clip_top = render.list_frame_y * s
     let clip_bottom = (render.list_frame_y + render.list_frame_height) * s
@@ -82,12 +56,17 @@ fn rebuild_and_upload() -> Unit = {
   } else ()
 }
 
+/// Lay out again and upload.
+fn rebuild_and_upload() -> Unit = {
+  ui.rebuild()
+  upload_all()
+}
+
 // Upload only on-screen items to GPU (fast enough to call every scroll frame)
 fn upload_visible() -> Unit = {
   let s = dpr()
-  let ry = sc.ax(root_region, sc.AXIS_Y)
-  let scroll_px = sc.ax_pos[ry] * s
-  let screen_h = viewport_h * s
+  let scroll_px = ui.scroll_y() * s
+  let screen_h = ui.viewport_h * s
   var xs: List[Float] = []
   var ys: List[Float] = []
   var ws: List[Float] = []
@@ -103,7 +82,7 @@ fn upload_visible() -> Unit = {
   // layout y plus the scroll offset, and looks it up in the tile of that
   // on-screen position — so tiles are assigned from this, not from `ys`.
   var screen_ys: List[Float] = []
-  for item in cached_items {
+  for item in ui.items {
     let iy = item.y * s + (if item.scrollable == 1 then scroll_px else 0.0)
     let visible = item.scrollable == 0 or (iy + item.h * s > 0.0 and iy < screen_h)
     if visible then {
@@ -161,10 +140,9 @@ fn upload_visible() -> Unit = {
 fn draw() -> Unit = {
   if scene_ready then {
     let s = dpr()
-    let ry = sc.ax(root_region, sc.AXIS_Y)
     snaidhm.draw_frame_2d(cached_scene,
-      0.0, sc.ax_pos[ry] * s,
-      sc.ax_bar_opacity[ry], 0.0, 0.0, 0.0)
+      0.0, ui.scroll_y() * s,
+      ui.scrollbar_opacity(), 0.0, 0.0, 0.0)
   } else ()
 }
 
@@ -172,10 +150,9 @@ fn draw() -> Unit = {
 fn draw_with_text(layer: text.TextLayer) -> Unit = {
   if scene_ready then {
     let s = dpr()
-    let ry = sc.ax(root_region, sc.AXIS_Y)
     snaidhm.draw_frame_2d_text(cached_scene, layer,
-      0.0, sc.ax_pos[ry] * s,
-      sc.ax_bar_opacity[ry], 0.0, 0.0, 0.0)
+      0.0, ui.scroll_y() * s,
+      ui.scrollbar_opacity(), 0.0, 0.0, 0.0)
   } else ()
 }
 
@@ -224,20 +201,14 @@ fn build_empty_scene() -> SceneData = {
 fn prepare(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int,
            img_vtx: Int, img_idx: Int, img_count: Int, img_texture: Int, img_sampler: Int,
            bg_texture: Int, bg_sampler: Int) -> Unit = {
-  viewport_w = int.to_float(css_w)
-  viewport_h = int.to_float(css_h)
-
   let data = build_empty_scene()
   cached_scene = snaidhm.prepare_scene(device, phys_w, phys_h, phys_w, phys_h,
     data.cubics, data.shadows, data.paints,
     img_vtx, img_idx, img_count, img_texture, img_sampler,
     bg_texture, bg_sampler)
   scene_ready = true
-
-  // Init scroll
-  sc.reset_all()
-  root_region = sc.create_region(viewport_w, viewport_h, viewport_w, viewport_h, 0 - 1)
-
+  ui.reset(int.to_float(css_w), int.to_float(css_h))
+  upload_all()
   draw()
 }
 
@@ -248,7 +219,7 @@ fn prepare(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int,
 /// Advance scroll physics by `dt` seconds and re-upload what moved, without
 /// drawing — for a host that draws the frame itself. 1 while still animating.
 fn scroll_step(dt: Float) -> Int = {
-  let running = sc.tick_all(dt)
+  let running = ui.scroll_step(dt)
   upload_visible()
   running
 }
@@ -260,139 +231,48 @@ fn scroll_tick(dt: Float) -> Int = {
   running
 }
 
-fn scroll_wheel(region: Int, dx: Float, dy: Float) -> Unit =
-  sc.route_wheel(region, dx, dy)
-
-fn get_scroll_pos(region: Int, axis: Int) -> Float = sc.get_pos(region, axis)
-
 fn flush() -> Unit = {
   rebuild_and_upload()
   draw()
 }
 
-fn set_scroll_frac(frac: Float) -> Unit = {
-  let ry = sc.ax(root_region, sc.AXIS_Y)
-  sc.set_scrollbar_frac(ry, frac, sc.rgn_content_h[root_region], sc.rgn_bounds_h[root_region])
-}
-
-fn get_scroll_info() -> Float = {
-  // Returns content_h * 1000 + viewport_h (packed for simplicity)
-  sc.rgn_content_h[root_region] * 10000.0 + sc.rgn_bounds_h[root_region]
-}
-
-fn set_viewport(w: Float, h: Float) -> Unit = {
-  viewport_w = w
-  viewport_h = h
-}
-
 // ══════════════════════════════════════════════════════════════
-// Text field input
+// State changes (ui's), then upload and draw
 // ══════════════════════════════════════════════════════════════
 
-fn input_clear() -> Unit = { input_buf = [] }
-
-fn input_push(byte: Int) -> Unit = { input_buf = input_buf + [byte] }
-
-/// Add the field's text (trimmed) as a todo and empty the field.
 fn input_submit() -> Unit = {
-  let entered = string.trim(string.from_bytes(input_buf))
-  input_buf = []
-  if string.len(entered) > 0 then {
-    td.add_todo(entered)
-    rebuild_and_upload()
-    draw()
-  } else ()
+  ui.input_submit()
+  upload_all()
+  draw()
 }
-
-/// Type code point `code` into the field.
-fn type_char(code: Int) -> Unit = {
-  input_buf = input_buf + string.to_bytes(string.from_codepoint(code))
-}
-
-/// Show `composing` — what an input method has composed so far, empty when it
-/// is done — at the field's caret, `from ..< to` marked. What it commits comes
-/// through `type_char`.
-fn set_composition(composing: String, from: Int, to: Int) -> Unit = {
-  compose = text.code_points(composing)
-  compose_from = from
-  compose_to = to
-}
-
-/// Delete the field's last character: its trailing continuation bytes
-/// (10xxxxxx) and the byte that leads them.
-fn backspace() -> Unit = {
-  var n = list.len(input_buf)
-  while n > 0 and input_buf[n - 1] >= 0x80 and input_buf[n - 1] < 0xC0 {
-    n = n - 1
-  }
-  input_buf = list.take(input_buf, int.max(0, n - 1))
-}
-
-// ══════════════════════════════════════════════════════════════
-// State change (triggers rebuild)
-// ══════════════════════════════════════════════════════════════
 
 fn todo_init_data() -> Unit = {
-  for i in 0..<20 {
-    td.add_todo("Item " + int.to_string(i))
-  }
-  rebuild_and_upload()
+  ui.todo_init_data()
+  upload_all()
   draw()
 }
 
 fn todo_add() -> Unit = {
-  let idx = td.next_id.get()
-  td.add_todo("Item " + int.to_string(idx))
-  rebuild_and_upload()
+  ui.todo_add()
+  upload_all()
   draw()
 }
 
 fn todo_toggle(id: Int) -> Unit = {
-  td.toggle_todo(id)
-  rebuild_and_upload()
+  ui.todo_toggle(id)
+  upload_all()
   draw()
 }
 
-// ══════════════════════════════════════════════════════════════
-// Click handling
-// ══════════════════════════════════════════════════════════════
-
-/// What a click at (`click_x`, `click_y`) hits: -2 the add button, a todo id,
-/// or -1 nothing.
-fn handle_click(click_x: Float, click_y: Float) -> Int = {
-  let list_y = render.list_frame_y
-  let list_h = render.list_frame_height
-
-  // Button first (below list)
-  if click_y > list_y + list_h then 0 - 2
-  // List area
-  else if click_y >= list_y then {
-    let scroll_y = sc.get_pos(root_region, sc.AXIS_Y)
-    let ih = 56.0
-    let todos_list = td.todos.get()
-    let total = list.len(todos_list)
-    let content_y = click_y - scroll_y - list_y
-    let idx = float.to_int(float.floor(content_y / ih))
-    if idx >= 0 and idx < total then todos_list[idx].id
-    else 0 - 1
-  }
-  else 0 - 1
-}
-
-/// A click, acted on: add a todo or toggle one, as the browser host does.
+/// A click, acted on as the browser host does.
 fn click(x: Float, y: Float) -> Unit = {
-  let hit = handle_click(x, y)
-  if hit == 0 - 2 then todo_add()
-  else if hit >= 0 then todo_toggle(hit)
-  else ()
+  if ui.click(x, y) then {
+    upload_all()
+    draw()
+  } else ()
 }
 
-fn hit_test(x: Float, y: Float) -> Int = sc.full_hit_test(x, y)
 
-/// The list's frame, CSS pixels: where scrolled rows are visible.
-fn list_frame_y() -> Float = render.list_frame_y
-
-fn list_frame_height() -> Float = render.list_frame_height
 
 // ══════════════════════════════════════════════════════════════
 // Text, drawn through snaidhm's glyph cache (native host)
@@ -405,13 +285,13 @@ fn list_frame_height() -> Float = render.list_frame_height
 /// field's content (or its placeholder) inset 12px as its <textarea> is.
 fn text_layer(device: Int, layer: text.TextLayer) -> text.TextLayer = {
   let s = dpr()
-  let scroll_px = sc.ax_pos[sc.ax(root_region, sc.AXIS_Y)] * s
+  let scroll_px = ui.scroll_y() * s
   let frame_top = render.list_frame_y * s
   let frame_bottom = (render.list_frame_y + render.list_frame_height) * s
   var l = text.clear(layer)
-  let n = list.len(cached_items)
+  let n = list.len(ui.items)
   for i in 0..<n {
-    let item = cached_items[i]
+    let item = ui.items[i]
     let size = item.font_size * s
     let x = item.x * s
     let w = item.w * s
@@ -443,7 +323,10 @@ fn text_layer(device: Int, layer: text.TextLayer) -> text.TextLayer = {
 fn field_text(device: Int, l: text.TextLayer, placeholder: String, size: Float,
               x: Float, y: Float, w: Float, h: Float, s: Float) -> text.TextLayer = {
   let pad = 12.0 * s
-  let typed = text.code_points(string.from_bytes(input_buf))
+  let typed = ui.typed()
+  let compose = ui.compose
+  let compose_from = ui.compose_from
+  let compose_to = ui.compose_to
   let empty = list.len(typed) == 0 and list.len(compose) == 0
   let ascent = text.ascent(l, size)
   let descent = text.descent(l, size)
@@ -481,8 +364,6 @@ fn field_text(device: Int, l: text.TextLayer, placeholder: String, size: Float,
   if composing and compose_to < 0 then () else {
     out = text.add_rect(device, out, cx, top, cx + line, bottom, 1.0, 1.0, 1.0, 0.9)
   }
-  caret_x = cx / s
-  caret_y = top / s
-  caret_h = (bottom - top) / s
+  ui.set_caret(cx / s, top / s, (bottom - top) / s)
   out
 }

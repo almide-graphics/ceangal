@@ -19,7 +19,24 @@ type RenderItem = {
   content: String,
   kind: Int,
   scrollable: Int,
+  /// The view's `on_click` id: what a click on the item means (0: nothing).
+  click: Int,
 }
+
+// ── Text width ──
+
+/// How wide `text` is at `size` CSS pixels, when no host says: 0.55 em a
+/// character, a full em for the scripts set without spaces (CJK), which are
+/// square.
+fn guess_width(text: String, size: Float) -> Float =
+  string.chars(text) |> list.fold(0.0, (w, c) => w + (if (string.codepoint(c) ?? 0) >= 0x2E80 then size else size * 0.55))
+
+/// How layout measures a label: `guess_width` until a host that draws the
+/// text with real fonts gives its own measure (`set_measure`).
+var measure_text: (String, Float) -> Float = guess_width
+
+/// Measure labels with `f` (text, size) -> width in CSS pixels from now on.
+fn set_measure(f: (String, Float) -> Float) -> Unit = { measure_text = f }
 
 // ── View → layout.Node conversion ──
 
@@ -38,8 +55,7 @@ fn view_to_node(view: v.View, viewport_h: Float, scroll_y: Float) -> lay.Node = 
   let s = view._style
 
   let base = if view._kind == v.TEXT then {
-               let char_w = s.font_size * 0.6
-               let text_w = int.to_float(string.len(view._content)) * char_w
+               let text_w = measure_text(view._content, s.font_size)
                let text_h = s.font_size * 1.4
                let w = if s.width > 0.0 then s.width else text_w
                let h = if s.height > 0.0 then s.height else text_h
@@ -123,7 +139,7 @@ fn zip_view_rects(view: v.View, rects: List[lay.LayoutRect], idx: Int) -> ZipRes
       fg_r: s.fg.r, fg_g: s.fg.g, fg_b: s.fg.b, fg_a: s.fg.a,
       rounded: s.rounded, opacity: s.opacity, font_size: s.font_size,
       selectable: s.selectable,
-      content: view._content, kind: view._kind, scrollable: 0,
+      content: view._content, kind: view._kind, scrollable: 0, click: view._on_click,
     }
     var items = [item]
     var next_idx = idx + 1
@@ -149,7 +165,7 @@ fn zip_view_rects(view: v.View, rects: List[lay.LayoutRect], idx: Int) -> ZipRes
           bg_r: cs.bg.r, bg_g: cs.bg.g, bg_b: cs.bg.b, bg_a: cs.bg.a,
           fg_r: cs.fg.r, fg_g: cs.fg.g, fg_b: cs.fg.b, fg_a: cs.fg.a,
           rounded: cs.rounded, opacity: cs.opacity, font_size: cs.font_size,
-          selectable: cs.selectable, content: "", kind: v.ROW, scrollable: 1,
+          selectable: cs.selectable, content: "", kind: v.ROW, scrollable: 1, click: child._on_click,
         }]
         // Text label (first child)
         if list.len(child._children) > 0 then {
@@ -160,7 +176,7 @@ fn zip_view_rects(view: v.View, rects: List[lay.LayoutRect], idx: Int) -> ZipRes
             bg_r: 0.0, bg_g: 0.0, bg_b: 0.0, bg_a: 0.0,
             fg_r: ts.fg.r, fg_g: ts.fg.g, fg_b: ts.fg.b, fg_a: ts.fg.a,
             rounded: 0.0, opacity: 1.0, font_size: ts.font_size,
-            selectable: ts.selectable, content: tc._content, kind: v.TEXT, scrollable: 1,
+            selectable: ts.selectable, content: tc._content, kind: v.TEXT, scrollable: 1, click: 0,
           }]
         } else ()
       }
@@ -188,3 +204,14 @@ fn list_content_height(view: v.View) -> Float = {
     found
   }
 }
+
+// ── Hit testing ──
+
+/// The `on_click` id of the topmost item under (`x`, `y`) that has one, 0
+/// where none does. List rows are where they are drawn: at their y plus
+/// `scroll`.
+fn hit(items: List[RenderItem], x: Float, y: Float, scroll: Float) -> Int =
+  items |> list.fold(0, (found, it) => {
+    let top = it.y + (if it.scrollable == 1 then scroll else 0.0)
+    if it.click != 0 and x >= it.x and x < it.x + it.w and y >= top and y < top + it.h then it.click else found
+  })

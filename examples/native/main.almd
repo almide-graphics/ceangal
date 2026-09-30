@@ -14,6 +14,7 @@
 import env
 import process
 import self.app as app
+import self.ui as ui
 import snaidhm.web.gpu as gpu
 import snaidhm.native.window as window
 import snaidhm.native.frame as frame
@@ -56,11 +57,11 @@ fn handle_input(start: Input) -> Input = {
     if kind == window.MOUSE_MOVE then {
       app.set_mouse(x, y)
       if st.dragging then {
-        app.set_scroll_frac(float.clamp(y / app.viewport_h, 0.0, 1.0))
+        ui.set_scroll_frac(float.clamp(y / ui.viewport_h, 0.0, 1.0))
         st = { ...st, animating: true }
       } else ()
     } else if kind == window.MOUSE_DOWN and window.event_code() == 0 then {
-      if x > app.viewport_w - SCROLLBAR_ZONE then { st = { ...st, dragging: true } } else ()
+      if x > ui.viewport_w - SCROLLBAR_ZONE then { st = { ...st, dragging: true } } else ()
     } else if kind == window.MOUSE_UP and window.event_code() == 0 then {
       if st.dragging then { st = { ...st, dragging: false } }
       else {
@@ -70,18 +71,18 @@ fn handle_input(start: Input) -> Input = {
     } else if kind == window.WHEEL then {
       // The scroll physics take the DOM's deltaY negated, as the browser host
       // hands them.
-      app.scroll_wheel(0, 0.0 - window.event_dx(), 0.0 - window.event_dy())
+      ui.scroll_wheel(0, 0.0 - window.event_dx(), 0.0 - window.event_dy())
       st = { ...st, animating: true }
     } else if kind == window.TEXT then {
-      app.type_char(window.event_code())
+      ui.type_char(window.event_code())
       st = { ...st, changed: true }
     } else if kind == window.COMPOSE then {
-      app.set_composition(window.event_text(), window.event_code(), window.event_end())
+      ui.set_composition(window.event_text(), window.event_code(), window.event_end())
       st = { ...st, changed: true }
     } else if kind == window.KEY then {
       let code = window.event_code()
       if code == window.KEY_ENTER then app.input_submit()
-      else if code == window.KEY_BACKSPACE then app.backspace()
+      else if code == window.KEY_BACKSPACE then ui.backspace()
       else ()
       st = { ...st, changed: true, snapshot: st.snapshot or code == window.KEY_ESCAPE }
     } else ()
@@ -106,6 +107,9 @@ effect fn main() -> Unit = {
     prepare(device)
     app.todo_init_data()
     var layer = app.text_layer(device, text.new_layer(device, faces))
+    // Labels laid out at the width the glyph cache draws them.
+    let measuring = layer
+    ui.set_measure((t, size) => text.measure(measuring, ui.code_points(t), size))
     match capture {
       some(path) => {
         app.draw_with_text(layer)
@@ -126,7 +130,7 @@ effect fn main() -> Unit = {
             st = { ...st, animating: app.scroll_step(FRAME_DT) == 1 }
           } else ()
           layer = app.text_layer(device, layer)
-          window.set_ime_area(app.caret_x, app.caret_y, 1.0, app.caret_h)
+          window.set_ime_area(ui.caret_x, ui.caret_y, 1.0, ui.caret_h)
           app.draw_with_text(layer)
           if st.snapshot then {
             println(if frame.save_png(SNAPSHOT) then "saved ${SNAPSHOT}" else "snapshot failed")
