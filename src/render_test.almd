@@ -71,3 +71,16 @@ test "the guess counts characters, a CJK one a full em" {
   assert(approx(r.guess_width("ab", 10.0), 11.0))
   assert(approx(r.guess_width("日本", 10.0), 20.0))
 }
+
+test "a click hits the topmost item that has an on_click id" {
+  let view = v.col([
+    v.row([v.text("a")]) |> v.h(40.0) |> v.on_click(7),
+    v.row([v.text("b")]) |> v.h(40.0) |> v.on_click(8),
+    v.text("c") |> v.h(40.0),
+  ])
+  let items = r.render(view, 200.0, 200.0)
+  assert_eq(r.hit(items, 10.0, 10.0, 0.0), 7)
+  // Over the label inside the second row: the row under it answers.
+  assert_eq(r.hit(items, 5.0, 50.0, 0.0), 8)
+  assert_eq(r.hit(items, 10.0, 90.0, 0.0), 0)
+}

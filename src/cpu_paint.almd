@@ -1,113 +1,25 @@
-// ceangal cpu_paint — ui.almd's items drawn on snaidhm's CPU canvas
+// ceangal cpu_paint — the todo app (ui.almd) on snaidhm's CPU canvas
 //
-// The CPU host's half: every item as the GPU host draws it — a rounded
-// rectangle in its colour, faded by its opacity; list rows moved by the
-// scroll offset and cut to the list's frame; a label left in its box and
-// centred on the line; the text field's content, composition and caret
-// inset 12px — plus the list's scrollbar, which the GPU host's shader draws.
-// The canvas draws in units, and a unit here is a CSS pixel, so a canvas made
-// for a window's scale is sharp at any scale.
+// cpu_draw's items with ui's text field and scroll, on a dark page, and the
+// list's scrollbar, which the GPU host's shader draws.
 
-import self.render as render
+import self.cpu_draw as draw
 import self.ui as ui
-import self.view as v
 import snaidhm.cpu.canvas as canvas
 import snaidhm.sfnt as sfnt
 
 /// The page behind the items.
 let BACKGROUND = 0.06
 
-/// A font's ascent and descent at `size`, in units (both positive).
-fn metrics(fonts: List[sfnt.Font], size: Float) -> (Float, Float) = {
-  let f = fonts[0]
-  let em = size / int.to_float(f.units_per_em)
-  (int.to_float(f.ascent) * em, 0.0 - int.to_float(f.descent) * em)
-}
-
-/// The item's text colour: the theme's where it sets one, white otherwise.
-fn text_colour(item: render.RenderItem) -> (Float, Float, Float, Float) =
-  if item.fg_a > 0.0 then (item.fg_r, item.fg_g, item.fg_b, item.fg_a) else (1.0, 1.0, 1.0, 1.0)
-
-/// ui's items on `frame` (a canvas for the window, drawn on in CSS pixels).
+/// ui's items on `frame` (a canvas for the window, drawn on in CSS pixels):
+/// the todo app, its field, list and scrollbar.
 fn paint(frame: canvas.Canvas, fonts: List[sfnt.Font]) -> canvas.Canvas = {
-  var c = canvas.clear(frame, BACKGROUND, BACKGROUND, BACKGROUND)
-  let scroll = ui.scroll_y()
-  let frame_top = ui.list_frame_y()
-  let frame_bottom = frame_top + ui.list_frame_height()
-  let n = list.len(ui.items)
-  for i in 0..<n {
-    let item = ui.items[i]
-    let y = item.y + (if ui.scrolls(item) then scroll else 0.0)
-    // List rows only inside the list's frame; everything else anywhere.
-    let top = if ui.scrolls(item) then float.max(y, frame_top) else y
-    let bottom = if ui.scrolls(item) then float.min(y + item.h, frame_bottom) else y + item.h
-    if bottom > top then {
-      c = canvas.clip(c, item.x, top, item.x + item.w, bottom)
-      let a = item.bg_a * item.opacity
-      if a > 0.0 then {
-        c = canvas.rect(c, item.x, y, item.x + item.w, y + item.h, item.rounded,
-          item.bg_r, item.bg_g, item.bg_b, a)
-      } else ()
-      if item.kind == v.TEXT and string.len(item.content) > 0 then {
-        let m = metrics(fonts, item.font_size)
-        let baseline = y + item.h / 2.0 + (m.0 - m.1) / 2.0
-        let col = text_colour(item)
-        c = canvas.draw_text(c, fonts, ui.code_points(item.content), item.font_size, item.x, baseline,
-          col.0, col.1, col.2, col.3 * item.opacity)
-      } else if item.kind == v.TEXT_FIELD then {
-        c = field(c, fonts, item.content, item.font_size, item.x, y, item.w, item.h)
-      } else ()
-    } else ()
-  }
-  c = scrollbar(canvas.unclip(c))
-  canvas.unclip(c)
-}
-
-/// The text field in the box at `x`, `y`, `w` x `h`: what was typed, then what
-/// an input method is composing, underlined (its marked part twice as thick),
-/// then the caret — or `placeholder` when there is nothing.
-fn field(frame: canvas.Canvas, fonts: List[sfnt.Font], placeholder: String, size: Float,
-         x: Float, y: Float, w: Float, h: Float) -> canvas.Canvas = {
-  let pad = 12.0
-  let typed = ui.typed()
-  let compose = ui.compose
-  let m = metrics(fonts, size)
-  let ascent = m.0
-  let descent = m.1
-  let baseline = y + pad + ascent
-  let left = x + pad
-  var c = frame
-  if list.len(typed) == 0 and list.len(compose) == 0 then {
-    c = canvas.draw_text(c, fonts, ui.code_points(placeholder), size, left, baseline, 0.5, 0.5, 0.5, 1.0)
-  } else {
-    c = canvas.draw_text(c, fonts, typed, size, left, baseline, 1.0, 1.0, 1.0, 1.0)
-  }
-  // The composition starts where the typed text ends.
-  let start = left + canvas.measure(fonts, typed, size)
-  let line = 1.0
-  let under = baseline + descent / 2.0
-  if list.len(compose) > 0 then {
-    c = canvas.draw_text(c, fonts, compose, size, start, baseline, 1.0, 1.0, 1.0, 1.0)
-    let end = start + canvas.measure(fonts, compose, size)
-    c = canvas.rect(c, start, under, float.min(end, x + w), under + line, 0.0, 0.8, 0.8, 0.85, 1.0)
-    if ui.compose_to > ui.compose_from and ui.compose_from >= 0 then {
-      let m0 = start + canvas.measure(fonts, list.take(compose, ui.compose_from), size)
-      let m1 = start + canvas.measure(fonts, list.take(compose, ui.compose_to), size)
-      c = canvas.rect(c, m0, under, float.min(m1, x + w), under + 2.0 * line, 0.0, 1.0, 1.0, 1.0, 1.0)
-    } else ()
-  } else ()
-  // The caret: at the end of the composition's marked part, else at the end
-  // of what was typed.
-  let composing = list.len(compose) > 0
-  let at = if composing and ui.compose_to >= 0 then start + canvas.measure(fonts, list.take(compose, ui.compose_to), size)
-           else start
-  let top = baseline - ascent
-  let bottom = baseline + descent
-  if composing and ui.compose_to < 0 then () else {
-    c = canvas.rect(c, at, top, at + line, bottom, 0.0, 1.0, 1.0, 1.0, 0.9)
-  }
-  ui.set_caret(at, top, bottom - top)
-  c
+  let field = { typed: ui.typed(), compose: ui.compose, from: ui.compose_from, to: ui.compose_to }
+  let top = ui.list_frame_y()
+  let scroll = { offset: ui.scroll_y(), top: top, bottom: top + ui.list_frame_height() }
+  let p = draw.draw(canvas.clear(frame, BACKGROUND, BACKGROUND, BACKGROUND), fonts, ui.items, field, scroll)
+  ui.set_caret(p.caret_x, p.caret_y, p.caret_h)
+  scrollbar(p.canvas)
 }
 
 /// The list's scrollbar: a thumb at the right edge of its frame while it
