@@ -1,3 +1,5 @@
+> **Moved.** ceangal is now developed in [almide-graphics/ceangal2](https://github.com/almide-graphics/ceangal2): the same layout engine and widgets, rebuilt to run one Almide program on the web, iOS, macOS, Android, Windows and Linux, with a CLI (`ceangal new`, `ceangal build`) and store packaging. Start an app from [ceangal-hello](https://github.com/almide-graphics/ceangal-hello). This repository is archived and kept for reference; existing git dependencies keep working.
+
 <p align="center">
   <img src="assets/logo.png" alt="Ceangal" width="200">
 </p>
